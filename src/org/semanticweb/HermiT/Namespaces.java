@@ -13,6 +13,13 @@ import java.util.Collections;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.semanticweb.HermiT.model.DLOntology;
+import org.semanticweb.HermiT.model.AtomicConcept;
+import org.semanticweb.HermiT.model.AtomicRole;
+import org.semanticweb.HermiT.model.Individual;
+import java.util.Set;
+import java.util.HashSet;
+
 /**
  * This class is responsible for mapping between URIs and "identifiers", which can be given in any of three different formats: 1) &lt;uri&gt; 2) prefix:localpart 3) localpart Forms 2 and 3 are dependent upon a set of namespace declarations which associates namespaces with prefices. An identifier encoded in form 2 which uses an unregistered prefix is invalid---expanding it will result in an exception. Form 3 can only be used if a "default namespace" (a namespace associated with an empty prefix) has been declared. Neither prefices nor localparts may contain colon characters.
  */
@@ -49,6 +56,8 @@ public class Namespaces implements Serializable {
         m_prefixByNamespace=new TreeMap<String,String>();
         buildNamespaceMatchingPattern();
     }
+    
+
     protected void buildNamespaceMatchingPattern() {
         List<String> list=new ArrayList<String>(m_prefixByNamespace.keySet());
         // Sort the namespaces longest-first:
@@ -207,7 +216,7 @@ public class Namespaces implements Serializable {
      * 
      * @return                  'true' if this namespace object already contained one of the well-known prefixes
      */
-    public boolean reegisterSemanticWebPrefixes() {
+    public boolean registerSemanticWebPrefixes() {
         boolean containsPrefix=false;
         for (Map.Entry<String,String> entry : semanticWebNamespaces.entrySet())
             if (registerNamespaceRaw(entry.getKey(),entry.getValue()))
@@ -235,4 +244,56 @@ public class Namespaces implements Serializable {
     public static boolean isInternalURI(String uri) {
         return uri.startsWith("internal:");
     }
+
+    // All HermiT-specific stuff (internal names, and this method) should really
+    // gp om a separate file: (-rob 2009/03/16)
+    public Namespaces(DLOntology dlOntology) {
+        m_namespaceByPrefix=new TreeMap<String,String>();
+        m_prefixByNamespace=new TreeMap<String,String>();
+        buildNamespaceMatchingPattern();
+
+        Set<String> namespaceURIs=new HashSet<String>();
+        for (AtomicConcept concept : dlOntology.getAllAtomicConcepts())
+            addURI(concept.getURI(),namespaceURIs);
+        for (AtomicRole atomicRole : dlOntology.getAllAtomicDataRoles())
+            addURI(atomicRole.getURI(),namespaceURIs);
+        for (AtomicRole atomicRole : dlOntology.getAllAtomicObjectRoles())
+            addURI(atomicRole.getURI(),namespaceURIs);
+        for (Individual individual : dlOntology.getAllIndividuals())
+            addURI(individual.getURI(),namespaceURIs);
+        registerSemanticWebPrefixes();
+        registerInternalNamespaces(namespaceURIs);
+        registerDefaultNamespace(dlOntology.getOntologyURI()+"#");
+        int prefixIndex=0;
+        for (String namespace : namespaceURIs)
+            if (!isNamespaceRegistered(namespace)) {
+                String prefix=getPrefixForIndex(prefixIndex);
+                while (isPrefixRegistered(prefix))
+                    prefix=getPrefixForIndex(++prefixIndex);
+                registerNamespace(prefix,namespace);
+                ++prefixIndex;
+            }
+    }
+    
+    private static String getPrefixForIndex(int prefixIndex) {
+        StringBuffer buffer=new StringBuffer();
+        while (prefixIndex>=26) {
+            buffer.insert(0,(char)(((int)'a')+(prefixIndex % 26)));
+            prefixIndex/=26;
+        }
+        buffer.insert(0,(char)(((int)'a')+prefixIndex));
+        return buffer.toString();
+    }
+    
+    private static void addURI(String uri,Set<String> namespaceURIs) {
+        if (!Namespaces.isInternalURI(uri)) {
+            int lastHash=uri.lastIndexOf('#');
+            if (lastHash!=-1) {
+                String namespaceURI=uri.substring(0,lastHash+1);
+                namespaceURIs.add(namespaceURI);
+            }
+        }
+    }
+
+
 }

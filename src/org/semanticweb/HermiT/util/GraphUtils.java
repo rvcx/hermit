@@ -14,7 +14,45 @@ import java.util.Comparator;
 import java.util.Collections;
 
 public class GraphUtils {
+    
+    /**
+     * Convenience function to get (an unmodifiable set of) the successors of
+     * a vertex in a graph; if the vertex has no successors or does not appear
+     * in the graph the empty set is returned.
+     * 
+     * Complexity: one set lookup
+     */
+    public static <T> Set<T> successors(T t, Map<T, Set<T>> graph) {
+        Set<T> out = graph.get(t);
+        if (out == null) {
+            return Collections.emptySet();
+        } else {
+            return out;
+        }
+    }
 
+    /**
+     * Convenience function to return the modifiable set of successors of a
+     * vertex, creating a new empty set if necessary.
+     * 
+     * Complexity: one set lookup
+     */
+    public static <T> Set<T> successorSet(T t, Map<T, Set<T>> graph) {
+        Set<T> out = graph.get(t);
+        if (out == null) {
+            out = new HashSet<T>();
+            graph.put(t, out);
+        }
+        return out;
+    }
+
+    /**
+     * Use a simple algorithm to compute the transitive closure of a graph in
+     * place. For more sophisticated handling of transitively check out the
+     * `TransAnalyzed` class below.
+     * 
+     * Complexity: O(n^3) worst-case (use `TransAnalyzed` for tighter bounds)
+     */
     public static <T> void transitivelyClose(Map<T, Set<T>> relation) {
         // We follow the outline of Warshall's algorithm, which runs in O(n^3),
         // but do our best to avoid the cubic blowup if we can:
@@ -37,6 +75,15 @@ public class GraphUtils {
         }
     } // end transitivelyClose
     
+    /**
+     * A comparator which uses a given ordering as the sort order for all
+     * elements. This is useful in cases where there is no natural ordering
+     * for a type but a consistent ordering of a known set of elements is
+     * required.
+     * 
+     * Complexity: creation of the comparator is linear; comparisons require
+     * two lookups in a set containing all elements.
+     */
     public static class CompareByPosition<T> implements Comparator<T> {
         private Map<T, Integer> positions = new HashMap<T, Integer>();
         public CompareByPosition(Collection<T> order) {
@@ -69,6 +116,12 @@ public class GraphUtils {
         }
     } // end class CompareByPosition
     
+    /**
+     * Return the inverse of a graph; i.e. if `v` is a successor of `u` in
+     * `graph`, then `u` is a successor of `v` in the returned graph.
+     * 
+     * Complexity: linear in the number of edges of the graph
+     */
     public static <T> Map<T, Set<T>> reversed(Map<T, Set<T>> graph) {
         Map<T, Set<T>> out = new HashMap<T, Set<T>>();
         for (Map.Entry<T, Set<T>> e : graph.entrySet()) {
@@ -84,6 +137,12 @@ public class GraphUtils {
         return out;
     } // end reversed
     
+    /**
+     * Prune the given map of elements with empty values. On return `graph`
+     * will contain only keys with at least one successor.
+     * 
+     * Complexity: linear in the number of vertices of the graph
+     */
     public static <T> void prune(Map<T, Set<T>> graph) {
         Collection<T> toPrune = new ArrayList<T>();
         for (Map.Entry<T, Set<T>> e : graph.entrySet()) {
@@ -96,6 +155,15 @@ public class GraphUtils {
         }
     }
     
+    /**
+     * Return a topological ordering of an acyclic graph; i.e. if `v` is a
+     * successor of `u` in `graph` then `u` will precede `v` in the returned
+     * list.
+     * 
+     * Note that this function requires `graph` to be acyclic.
+     * 
+     * Complexity: O(|V| + |E|)
+     */
     public static <T> List<T> topologicalSort(Map<T, Set<T>> graph) {
         List<T> out = new ArrayList<T>();
         Map<T, Set<T>> incoming = reversed(graph);
@@ -126,68 +194,93 @@ public class GraphUtils {
         return out;
     } // end topologicalSort
 
-    public static <T> Set<Set<T>>
-        stronglyConnectedComponents(final Map<T, Set<T>> graph) {
-        final Set<Set<T>> out = new HashSet<Set<T>>();
-        final List<T> stack = new ArrayList<T>();
-        final Set<T> stackSet = new HashSet<T>();
-        final Map<T, Integer> indices = new HashMap<T, Integer>();
-        final Map<T, Integer> lows = new HashMap<T, Integer>();
-        class Tarjan {
-            int index = 0;
-            void tarjan(T t) {
-                Integer tIndex = new Integer(index++);
-                indices.put(t, tIndex);
-                Integer tLow = tIndex;
-                lows.put(t, tLow);
-                stack.add(t);
-                stackSet.add(t);
-                Set<T> successors = graph.get(t);
-                if (successors != null) {
-                    for (T succ : successors) {
-                        if (!indices.containsKey(succ)) {
-                            tarjan(succ);
-                            Integer succLow = lows.get(succ);
-                            assert succLow != null; // set by tarjan(succ)
-                            if (tLow < succLow) {
-                                lows.put(t, succLow);
-                                tLow = succLow;
-                            }
-                        } else if (stackSet.contains(succ)) {
-                            Integer succLow = lows.get(succ);
-                            assert succLow != null; // always set if on stack
-                            if (tLow < succLow) {
-                                lows.put(t, succLow);
-                                tLow = succLow;
-                            }
-                        }
-                    }
-                }
-                if (tLow.equals(tIndex)) {
-                    Set<T> scc = new HashSet<T>();
-                    T member;
-                    do {
-                        member = stack.remove(stack.size() - 1);
-                        stackSet.remove(member);
-                        scc.add(member);
-                    } while (member != t);
-                    out.add(scc);
-                }
-            } // end tarjan
-        } // end Tarjan class
-        Tarjan tar = new Tarjan();
-        for (T t : graph.keySet()) {
-            if (!indices.containsKey(t)) {
-                tar.tarjan(t);
-            }
-        }
-        return out;
-    } // end stronglyConnectedComponents
-    
+    // /**
+    //  * A buggy algorithm to compute strongly connected components.
+    //  */
+    // public static <T> Set<Set<T>>
+    //     stronglyConnectedComponents(final Map<T, Set<T>> graph) {
+    //     final Set<Set<T>> out = new HashSet<Set<T>>();
+    //     final List<T> stack = new ArrayList<T>();
+    //     final Set<T> stackSet = new HashSet<T>();
+    //     final Map<T, Integer> indices = new HashMap<T, Integer>();
+    //     final Map<T, Integer> lows = new HashMap<T, Integer>();
+    //     class Tarjan {
+    //         int index = 0;
+    //         void tarjan(T t) {
+    //             Integer tIndex = new Integer(index++);
+    //             indices.put(t, tIndex);
+    //             Integer tLow = tIndex;
+    //             lows.put(t, tLow);
+    //             stack.add(t);
+    //             stackSet.add(t);
+    //             Set<T> successors = graph.get(t);
+    //             if (successors != null) {
+    //                 for (T succ : successors) {
+    //                     if (!indices.containsKey(succ)) {
+    //                         tarjan(succ);
+    //                         Integer succLow = lows.get(succ);
+    //                         assert succLow != null; // set by tarjan(succ)
+    //                         if (tLow < succLow) {
+    //                             lows.put(t, succLow);
+    //                             tLow = succLow;
+    //                         }
+    //                     } else if (stackSet.contains(succ)) {
+    //                         Integer succLow = lows.get(succ);
+    //                         assert succLow != null; // always set if on stack
+    //                         if (tLow < succLow) {
+    //                             lows.put(t, succLow);
+    //                             tLow = succLow;
+    //                         }
+    //                     }
+    //                 }
+    //             }
+    //             if (tLow.equals(tIndex)) {
+    //                 Set<T> scc = new HashSet<T>();
+    //                 T member;
+    //                 do {
+    //                     member = stack.remove(stack.size() - 1);
+    //                     stackSet.remove(member);
+    //                     scc.add(member);
+    //                 } while (member != t);
+    //                 out.add(scc);
+    //             }
+    //         } // end tarjan
+    //     } // end Tarjan class
+    //     Tarjan tar = new Tarjan();
+    //     for (T t : graph.keySet()) {
+    //         if (!indices.containsKey(t)) {
+    //             tar.tarjan(t);
+    //         }
+    //     }
+    //     return out;
+    // } // end stronglyConnectedComponents
+
+    /**
+     * Create an acyclic version of a graph by replacing every cycle with
+     * a single (arbitrarily chosen) canonical vertex to represent the cycle.
+     * 
+     * The constructor for the class does all the work, with the result stored
+     * in the object's (public) members.
+     */
     public static class Acyclic<T> {
+        /**
+         * An acyclic graph, with a single vertex chosen to represent each
+         * cycle from the original graph.
+         */
         public Map<T, Set<T>> graph = new HashMap<T, Set<T>>();
+
+        /**
+         * A map from each vertex of the original graph to that vertex's
+         * representative in the acyclic graph.
+         */
         public Map<T, T> canonical = new HashMap<T, T>();
+        
+        /**
+         * A map from each vertex of the acyclic graph to the set of vertices
+         * of the original graph it represents.
+         */
         public Map<T, Set<T>> equivs = new HashMap<T, Set<T>>();
+        
         public Acyclic(Map<T, Set<T>> graph) {
             for (Set<T> scc : sccs(graph)) {
                 assert !scc.isEmpty();
@@ -214,6 +307,12 @@ public class GraphUtils {
         } // end constructor
     } // end class Acyclic
     
+    /**
+     * Compute the transitive reduction and transitive closure of a graph.
+     * 
+     * The constructor for the class does all the work, with the results
+     * stored in the object's (public) members.
+     */
     public static class TransAnalyzed<T> {
         public Map<T, Set<T>> reduced = new HashMap<T, Set<T>>();
         public Map<T, Set<T>> closed = new HashMap<T, Set<T>>();
@@ -260,6 +359,14 @@ public class GraphUtils {
         } // end constructor
     } // end class TransAnalyzed
     
+    /**
+     * Explore a graph depth-first, recording the order in which vertices
+     * were first and last visited, as well as the edge used to visit each
+     * vertex. The algorithm is from Cormen, Leiserson, and Rivest.
+     * 
+     * This is really just used as a utility within computation of strongly-
+     * connected components.
+     */
     static class DepthFirstSearch<T> {
         public Map<T, Integer> discovered = new HashMap<T, Integer>();
         public Map<T, Integer> finished = new HashMap<T, Integer>();
@@ -292,19 +399,18 @@ public class GraphUtils {
         }
     }
     
+    /**
+     * Return the strongly-connected components of a graph.
+     * The algorithm is from Cormen, Leiserson, and Rivest.
+     */
     static <T> Set<Set<T>> sccs(Map<T, Set<T>> graph) {
-        final Map<T, Integer> positions = new DepthFirstSearch<T>(graph, null).finished;
+        final Map<T, Integer> positions
+            = new DepthFirstSearch<T>(graph, null).finished;
         final List<T> elements = new ArrayList<T>(positions.keySet());
-        // for (T t : elements) { System.out.print(t); System.out.print(" "); }
-        // System.out.println("");
         Collections.sort(elements, new CompareByPosition<T>(positions));
         Collections.reverse(elements);
-        // for (T t : elements) { System.out.print(t); System.out.print(" "); }
-        // System.out.println("");
-        final Map<T, T> predecessor = new DepthFirstSearch<T>(reversed(graph), elements).predecessor;
-        // for (Map.Entry<T,T> e : predecessor.entrySet()) {
-        //     System.out.println(String.valueOf(e.getKey()) + " <- " + String.valueOf(e.getValue()));
-        // }
+        final Map<T, T> predecessor
+            = new DepthFirstSearch<T>(reversed(graph), elements).predecessor;
         class Components {
             Map<T, Set<T>> map = new HashMap<T, Set<T>>();
             Set<T> component(T t) {
@@ -328,6 +434,20 @@ public class GraphUtils {
             }
         }
         return new HashSet<Set<T>>(new Components().map.values());
+    }
+    
+    /**
+     * Check whether all edges of one graph are contained in another.
+     */
+    public static <T> boolean isSubgraphOf(Map<T, Set<T>> subGraph,
+                                           Map<T, Set<T>> superGraph) {
+        for (Map.Entry<T, Set<T>> e : subGraph.entrySet()) {
+            if (!successors(e.getKey(), superGraph)
+                    .containsAll(e.getValue())) {
+                return false;
+            }
+        }
+        return true;
     }
     
     static <T> void printGraph(Map<T, Set<T>> graph) {

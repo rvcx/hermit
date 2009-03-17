@@ -72,8 +72,8 @@ public class HermiTReasoner implements MonitorableOWLReasoner {
 
     public void classify() {
         try {
-            monitor.beginTask("Classifying...",hermit.getDLOntology().getNumberOfExternalConcepts());
-            hermit.computeClassHierarchy();
+            monitor.beginTask("Classifying...");
+            hermit.cacheClassHierarchy();
         }
         catch (PluginMonitor.Cancelled e) {
             // ignore; if we pass it on the user gets a dialog
@@ -101,7 +101,7 @@ public class HermiTReasoner implements MonitorableOWLReasoner {
     }
 
     public boolean isClassified() {
-        return hermit!=null && hermit.isClassHierarchyComputed();
+        return hermit!=null && hermit.isClassHierarchyCached();
     }
 
     public boolean isDefined(OWLClass c) {
@@ -121,7 +121,7 @@ public class HermiTReasoner implements MonitorableOWLReasoner {
     }
 
     public boolean isRealised() {
-        return hermit!=null && hermit.isRealizationComputed();
+        return hermit!=null && hermit.isRealizationCached();
     }
 
     public void loadOntologies(Set<OWLOntology> inOntologies) {
@@ -163,7 +163,7 @@ public class HermiTReasoner implements MonitorableOWLReasoner {
 
     public void realise() {
         if (hermit!=null)
-            hermit.computeRealization();
+            hermit.cacheRealization();
     }
     public void unloadOntologies(Set<OWLOntology> inOntologies) {
         HashSet<OWLOntology> remainingOntologies=new HashSet<OWLOntology>(ontologies);
@@ -174,7 +174,7 @@ public class HermiTReasoner implements MonitorableOWLReasoner {
     public boolean isSatisfiable(OWLDescription d) {
         if (hermit==null)
             return true;
-        return hermit.isClassSatisfiable(d);
+        return hermit.isSatisfiable(d);
     }
 
     protected <T> Set<Set<T>> posToSets(Set<HierarchyPosition<T>> positions) {
@@ -190,21 +190,21 @@ public class HermiTReasoner implements MonitorableOWLReasoner {
         if (hermit==null) {
             return new HashSet<Set<OWLClass>>();
         }
-        return posToSets(hermit.getClassHierarchyPosition(d).getDescendantPositions());
+        return posToSets(hermit.getHierarchyPosition(d).getDescendantPositions());
     }
 
     public Set<Set<OWLClass>> getAncestorClasses(OWLDescription d) {
         if (hermit==null) {
             return new HashSet<Set<OWLClass>>();
         }
-        return posToSets(hermit.getClassHierarchyPosition(d).getAncestorPositions());
+        return posToSets(hermit.getHierarchyPosition(d).getAncestorPositions());
     }
 
     public Set<OWLClass> getEquivalentClasses(OWLDescription d) {
         if (hermit==null) {
             return new HashSet<OWLClass>();
         }
-        return new HashSet<OWLClass>(hermit.getClassHierarchyPosition(d).getEquivalents());
+        return new HashSet<OWLClass>(hermit.getHierarchyPosition(d).getEquivalents());
     }
 
     public Set<OWLClass> getInconsistentClasses() {
@@ -215,14 +215,14 @@ public class HermiTReasoner implements MonitorableOWLReasoner {
         if (hermit==null) {
             return new HashSet<Set<OWLClass>>();
         }
-        return posToSets(hermit.getClassHierarchyPosition(d).getChildPositions());
+        return posToSets(hermit.getHierarchyPosition(d).getChildPositions());
     }
 
     public Set<Set<OWLClass>> getSuperClasses(OWLDescription d) {
         if (hermit==null) {
             return new HashSet<Set<OWLClass>>();
         }
-        return posToSets(hermit.getClassHierarchyPosition(d).getParentPositions());
+        return posToSets(hermit.getHierarchyPosition(d).getParentPositions());
     }
 
     public boolean isEquivalentClass(OWLDescription c,OWLDescription d) {
@@ -233,7 +233,7 @@ public class HermiTReasoner implements MonitorableOWLReasoner {
     public boolean isSubClassOf(OWLDescription subclass,OWLDescription superclass) {
         if (hermit==null)
             return false;
-        return hermit.isClassSubsumedBy(subclass,superclass);
+        return hermit.isSubsumedBy(subclass,superclass);
     }
 
     public boolean isConsistent(OWLOntology ignored) {
@@ -251,10 +251,10 @@ public class HermiTReasoner implements MonitorableOWLReasoner {
             return new HashSet<OWLIndividual>();
         }
         else if (direct) {
-            return new HashSet<OWLIndividual>(hermit.getClassDirectInstances(d));
+            return new HashSet<OWLIndividual>(hermit.getDirectMembers(d));
         }
         else {
-            return new HashSet<OWLIndividual>(hermit.getClassInstances(d));
+            return new HashSet<OWLIndividual>(hermit.getMembers(d));
         }
     }
 
@@ -275,14 +275,15 @@ public class HermiTReasoner implements MonitorableOWLReasoner {
     public Set<Set<OWLClass>> getTypes(OWLIndividual individual,boolean direct) {
         Set<Set<OWLClass>> result=new HashSet<Set<OWLClass>>();
         if (hermit!=null) {
-            Set<HierarchyPosition<OWLClass>> individualTypes=hermit.getIndividualTypes(individual);
-            for (HierarchyPosition<OWLClass> individualType : individualTypes) {
-                if (direct) {
-                    result.addAll(posToSets(individualType.getParentPositions()));
+            HierarchyPosition<OWLClass> pos = hermit.getHierarchyPosition(individual);
+            if (direct) {
+                if (pos.getEquivalents().isEmpty()) {
+                    result.addAll(posToSets(pos.getParentPositions()));
+                } else {
+                    result.add(new HashSet<OWLClass>(pos.getEquivalents()));
                 }
-                else {
-                    result.addAll(posToSets(individualType.getAncestorPositions()));
-                }
+            } else {
+                result.addAll(posToSets(pos.getAncestorPositions()));
             }
         }
         return result;
@@ -298,7 +299,7 @@ public class HermiTReasoner implements MonitorableOWLReasoner {
 
     public boolean hasType(OWLIndividual individual,OWLDescription type,boolean direct) {
         if (type instanceof OWLClass&&direct) {
-            for (HierarchyPosition<OWLClass> pos : hermit.getClassHierarchyPosition(manager.getOWLDataFactory().getOWLObjectOneOf(individual)).getParentPositions()) {
+            for (HierarchyPosition<OWLClass> pos : hermit.getHierarchyPosition(manager.getOWLDataFactory().getOWLObjectOneOf(individual)).getParentPositions()) {
                 if (pos.getEquivalents().contains((OWLClass)type)) {
                     return true;
                 }
@@ -314,28 +315,28 @@ public class HermiTReasoner implements MonitorableOWLReasoner {
         if (hermit==null) {
             return new HashSet<Set<OWLDataProperty>>();
         }
-        return posToSets(hermit.getPropertyHierarchyPosition(property).getAncestorPositions());
+        return posToSets(hermit.getHierarchyPosition(property).getAncestorPositions());
     }
 
     public Set<Set<OWLObjectProperty>> getAncestorProperties(OWLObjectProperty property) {
         if (hermit==null) {
             return new HashSet<Set<OWLObjectProperty>>();
         }
-        return posToSets(hermit.getPropertyHierarchyPosition(property).getAncestorPositions());
+        return posToSets(hermit.getHierarchyPosition(property).getAncestorPositions());
     }
 
     public Set<Set<OWLDataProperty>> getDescendantProperties(OWLDataProperty property) {
         if (hermit==null) {
             return new HashSet<Set<OWLDataProperty>>();
         }
-        return posToSets(hermit.getPropertyHierarchyPosition(property).getDescendantPositions());
+        return posToSets(hermit.getHierarchyPosition(property).getDescendantPositions());
     }
 
     public Set<Set<OWLObjectProperty>> getDescendantProperties(OWLObjectProperty property) {
         if (hermit==null) {
             return new HashSet<Set<OWLObjectProperty>>();
         }
-        return posToSets(hermit.getPropertyHierarchyPosition(property).getDescendantPositions());
+        return posToSets(hermit.getHierarchyPosition(property).getDescendantPositions());
     }
 
     public Set<Set<OWLDescription>> getDomains(OWLDataProperty property) {
@@ -360,14 +361,14 @@ public class HermiTReasoner implements MonitorableOWLReasoner {
         if (hermit==null) {
             return new HashSet<OWLDataProperty>();
         }
-        return new HashSet<OWLDataProperty>(hermit.getPropertyHierarchyPosition(property).getEquivalents());
+        return new HashSet<OWLDataProperty>(hermit.getHierarchyPosition(property).getEquivalents());
     }
 
     public Set<OWLObjectProperty> getEquivalentProperties(OWLObjectProperty property) {
         if (hermit==null) {
             return new HashSet<OWLObjectProperty>();
         }
-        return new HashSet<OWLObjectProperty>(hermit.getPropertyHierarchyPosition(property).getEquivalents());
+        return new HashSet<OWLObjectProperty>(hermit.getHierarchyPosition(property).getEquivalents());
     }
 
     public Set<Set<OWLObjectProperty>> getInverseProperties(OWLObjectProperty property) {
@@ -392,28 +393,28 @@ public class HermiTReasoner implements MonitorableOWLReasoner {
         if (hermit==null) {
             return new HashSet<Set<OWLDataProperty>>();
         }
-        return posToSets(hermit.getPropertyHierarchyPosition(property).getChildPositions());
+        return posToSets(hermit.getHierarchyPosition(property).getChildPositions());
     }
 
     public Set<Set<OWLObjectProperty>> getSubProperties(OWLObjectProperty property) {
         if (hermit==null) {
             return new HashSet<Set<OWLObjectProperty>>();
         }
-        return posToSets(hermit.getPropertyHierarchyPosition(property).getChildPositions());
+        return posToSets(hermit.getHierarchyPosition(property).getChildPositions());
     }
 
     public Set<Set<OWLDataProperty>> getSuperProperties(OWLDataProperty property) {
         if (hermit==null) {
             return new HashSet<Set<OWLDataProperty>>();
         }
-        return posToSets(hermit.getPropertyHierarchyPosition(property).getParentPositions());
+        return posToSets(hermit.getHierarchyPosition(property).getParentPositions());
     }
 
     public Set<Set<OWLObjectProperty>> getSuperProperties(OWLObjectProperty property) {
         if (hermit==null) {
             return new HashSet<Set<OWLObjectProperty>>();
         }
-        return posToSets(hermit.getPropertyHierarchyPosition(property).getParentPositions());
+        return posToSets(hermit.getHierarchyPosition(property).getParentPositions());
     }
 
     public boolean isFunctional(OWLDataProperty property) {

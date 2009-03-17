@@ -36,6 +36,7 @@ import org.semanticweb.HermiT.existentials.CreationOrderStrategy;
 import org.semanticweb.HermiT.existentials.ExpansionStrategy;
 import org.semanticweb.HermiT.existentials.IndividualReuseStrategy;
 import org.semanticweb.HermiT.hierarchy.Classifier;
+import org.semanticweb.HermiT.hierarchy.Hierarchy;
 import org.semanticweb.HermiT.hierarchy.HierarchyPosition;
 import org.semanticweb.HermiT.hierarchy.NaiveHierarchyPosition;
 import org.semanticweb.HermiT.hierarchy.PositionTranslator;
@@ -78,329 +79,401 @@ import org.semanticweb.owl.model.OWLObjectProperty;
 import org.semanticweb.owl.model.OWLObjectPropertyExpression;
 import org.semanticweb.owl.model.OWLOntology;
 import org.semanticweb.owl.model.OWLOntologyManager;
+import org.semanticweb.HermiT.hierarchy.Taxonomy;
+import org.semanticweb.HermiT.hierarchy.TaxonomyHierarchy;
 
 /**
- * Answers queries about the logical implications of a particular knowledge base. A Reasoner is associated with a single knowledge base, which is "loaded" when the reasoner is constructed. By default a full classification of all atomic terms in the knowledge base is also performed at this time (which can take quite a while for large or complex ontologies), but this behavior can be disabled as a part of the Reasoner configuration. Internal details of the loading and reasoning algorithms can be configured in the Reasoner constructor and do not change over the lifetime of the Reasoner object---internal data structures and caches are optimized for a particular configuration. By default, HermiT will use the set of options which provide optimal performance.
+ * Answers queries about the logical implications of a particular knowledge 
+ * base. A Reasoner is associated with a single knowledge base, which is 
+ * "loaded" when the reasoner is constructed. By default a full classification 
+ * of all atomic terms in the knowledge base is also performed at this time 
+ * (which can take quite a while for large or complex ontologies), but this 
+ * behavior can be disabled as a part of the Reasoner configuration. Internal 
+ * details of the loading and reasoning algorithms can be configured in the 
+ * Reasoner constructor and do not change over the lifetime of the Reasoner 
+ * object---internal data structures and caches are optimized for a particular 
+ * configuration. By default, HermiT will use the set of options which provide 
+ * optimal performance.
+
  */
 public class Reasoner implements Serializable {
     private static final long serialVersionUID=-8277117863937974032L;
 
-    protected final Configuration m_configuration;
-    protected final DLOntology m_dlOntology;
-    protected final Namespaces m_namespaces;
-    protected final Tableau m_tableau;
-    protected final TableauSubsumptionChecker m_subsumptionChecker;
-    protected final Classifier<AtomicConcept> m_classifier;
-    protected Map<AtomicConcept,HierarchyPosition<AtomicConcept>> m_atomicConceptHierarchy;
-    protected Map<AtomicRole,HierarchyPosition<AtomicRole>> m_atomicRoleHierarchy;
-    protected Map<AtomicConcept,Set<Individual>> m_realization;
+    // these four are never null:
+    private final Configuration configuration;
+    private final DLOntology dlOntology;
+    private final Namespaces namespaces;
+    private final Tableau tableau;
+    
+    // these three might be null, and are created on demand by `get...` methods:
+    private Map<AtomicRole,HierarchyPosition<AtomicRole>> roleHierarchy;
+    private Hierarchy<AtomicConcept> conceptHierarchy;
+    private Map<AtomicConcept, Set<Individual>> realization;
+    
+    public Namespaces getNamespaces() {
+        return namespaces;
+    }
 
-    public Reasoner(String ontologyURI) throws IllegalArgumentException,OWLException {
+    @Deprecated
+    public void seedSubsumptionCache() {
+        cacheClassHierarchy();
+    }
+    
+    public void cacheClassHierarchy() {
+        getConceptHierarchy();
+    }
+    
+    @Deprecated
+    public boolean isSubsumptionCacheSeeded() {
+        return isClassHierarchyCached();
+    }
+    
+    public boolean isClassHierarchyCached() {
+        return conceptHierarchy != null;
+    }
+    
+    public void cacheRealization() {
+        getRealization();
+    }
+    
+    public boolean isRealizationCached() {
+        return realization != null;
+    }
+    
+    private Hierarchy<AtomicConcept> getConceptHierarchy() {
+        if (conceptHierarchy == null) {
+            Set<AtomicConcept> allConcepts = new HashSet<AtomicConcept>();
+            for (AtomicConcept c : dlOntology.getAllAtomicConcepts()) {
+                if (!Namespaces.isInternalURI(c.getURI())) {
+                    allConcepts.add(c);
+                }
+            }
+            Map<AtomicConcept, Set<AtomicConcept>> known
+                = new HashMap<AtomicConcept, Set<AtomicConcept>>();
+            Map<AtomicConcept, Set<AtomicConcept>> possible
+                = new HashMap<AtomicConcept, Set<AtomicConcept>>();
+            for (AtomicConcept c : allConcepts) {
+                Set<AtomicConcept> s = new HashSet<AtomicConcept>();
+                s.add(c);
+                known.put(c, s);
+                possible.put(c, new HashSet<AtomicConcept>(allConcepts));
+            }
+            Taxonomy<AtomicConcept> tax = new Taxonomy<AtomicConcept>(
+                new Taxonomy.Ordering<AtomicConcept>() {
+                    public boolean doesPrecede(AtomicConcept child,
+                                               AtomicConcept parent) {
+                        return tableau.isSubsumedBy(child, parent);
+                    }
+                },
+                known, possible // TODO: set these!
+            );
+            conceptHierarchy = new TaxonomyHierarchy<AtomicConcept>(tax);
+        }
+        return conceptHierarchy;
+    }
+    
+    void outputClauses(java.io.PrintWriter output, Namespaces namespaces) {
+        output.println(dlOntology.toString(namespaces));
+    }
+    
+    public Reasoner(String ontologyURI)
+        throws IllegalArgumentException, OWLException {
         this(new Configuration(),URI.create(ontologyURI));
     }
 
-    public Reasoner(java.net.URI ontologyURI) throws IllegalArgumentException,OWLException {
+    public Reasoner(java.net.URI ontologyURI)
+        throws IllegalArgumentException,OWLException {
         this(new Configuration(),ontologyURI);
     }
 
-    public Reasoner(Configuration configuration,java.net.URI ontologyURI) throws IllegalArgumentException,OWLException {
-        this(configuration,ontologyURI,(Set<DescriptionGraph>)null,(Set<OWLHasKeyDummy>)null);
+    public Reasoner(Configuration configuration, java.net.URI ontologyURI)
+        throws IllegalArgumentException,OWLException {
+        this(configuration,ontologyURI, (Set<DescriptionGraph>) null,
+             (Set<OWLHasKeyDummy>) null);
     }
 
-    public Reasoner(Configuration configuration,java.net.URI ontologyURI,Set<DescriptionGraph> descriptionGraphs,Set<OWLHasKeyDummy> keys) throws IllegalArgumentException,OWLException {
-        if (descriptionGraphs==null)
-            descriptionGraphs=Collections.emptySet();
-        if (keys==null)
-            keys=Collections.emptySet();
-        OWLOntologyManager ontologyManager=OWLManager.createOWLOntologyManager();
-        OWLOntology ontology=ontologyManager.loadOntologyFromPhysicalURI(ontologyURI);
-        OWLClausification clausifier=new OWLClausification(configuration);
-        m_dlOntology=clausifier.clausifyWithKeys(ontologyManager,ontology,descriptionGraphs,keys);
-        m_configuration=configuration;
-        m_namespaces=createNamespaces(m_dlOntology);
-        m_tableau=createTableau(m_configuration,m_dlOntology,m_namespaces);
-        m_subsumptionChecker=new TableauSubsumptionChecker(m_tableau);
-        m_classifier=new Classifier<AtomicConcept>(new TableauFunc(m_subsumptionChecker));
+    public Reasoner(Configuration configuration,
+                    OWLOntologyManager ontologyManger,
+                    OWLOntology ontology) {
+        this(configuration, ontologyManger, ontology,
+             (Set<DescriptionGraph>) null, (Set<OWLHasKeyDummy>) null);
     }
 
-    public Reasoner(Configuration configuration,OWLOntologyManager ontologyManger,OWLOntology ontology) {
-        this(configuration,ontologyManger,ontology,(Set<DescriptionGraph>)null,(Set<OWLHasKeyDummy>)null);
+    public Reasoner(Configuration configuration, java.net.URI ontologyURI,
+                    Set<DescriptionGraph> descriptionGraphs,
+                    Set<OWLHasKeyDummy> keys)
+        throws IllegalArgumentException,OWLException {
+        if (descriptionGraphs == null) {
+            descriptionGraphs = Collections.emptySet();
+        }
+        if (keys == null) {
+            keys = Collections.emptySet();
+        }
+        OWLOntologyManager ontologyManager
+            = OWLManager.createOWLOntologyManager();
+        OWLOntology ontology
+            = ontologyManager.loadOntologyFromPhysicalURI(ontologyURI);
+        OWLClausification clausifier
+            = new OWLClausification(configuration);
+        dlOntology = clausifier.clausifyWithKeys(ontologyManager, ontology,
+                                                 descriptionGraphs, keys);
+        this.configuration = configuration;
+        this.namespaces = new Namespaces(dlOntology);
+        this.tableau = createTableau(configuration, dlOntology, namespaces);
     }
 
-    public Reasoner(Configuration configuration,OWLOntologyManager ontologyManager,OWLOntology ontology,Set<DescriptionGraph> descriptionGraphs,Set<OWLHasKeyDummy> keys) {
-        OWLClausification clausifier=new OWLClausification(configuration);
-        if (descriptionGraphs==null)
-            descriptionGraphs=Collections.emptySet();
-        if (keys==null)
-            keys=Collections.emptySet();
-        m_configuration=configuration;
-        m_dlOntology=clausifier.clausifyWithKeys(ontologyManager,ontology,descriptionGraphs,keys);
-        m_namespaces=createNamespaces(m_dlOntology);
-        m_tableau=createTableau(m_configuration,m_dlOntology,m_namespaces);
-        m_subsumptionChecker=new TableauSubsumptionChecker(m_tableau);
-        m_classifier=new Classifier<AtomicConcept>(new TableauFunc(m_subsumptionChecker));
+    public Reasoner(Configuration configuration,
+                    OWLOntologyManager ontologyManager,
+                    OWLOntology ontology,
+                    Set<DescriptionGraph> descriptionGraphs,
+                    Set<OWLHasKeyDummy> keys) {
+        OWLClausification clausifier = new OWLClausification(configuration);
+        if (descriptionGraphs == null) {
+            descriptionGraphs = Collections.emptySet();
+        }
+        if (keys == null) {
+            keys = Collections.emptySet();
+        }
+        this.configuration = configuration;
+        dlOntology = clausifier.clausifyWithKeys(ontologyManager, ontology,
+                                                 descriptionGraphs, keys);
+        namespaces = new Namespaces(dlOntology);
+        tableau = createTableau(configuration, dlOntology, namespaces);
     }
     
     /**
-     * Creates a reasoner that contains all axioms from the ontologies in the 'ontologies'' parameter.
-     * If any ontology in this collection contains imports, these are *NOT* traversed -- that is,
-     * the resulting ontology contains *EXACTLY* the axioms explciitly present in the supplied ontologies.
-     * The resulting DL ontology has the URI ontologyURI.
+     * Creates a reasoner that contains all axioms from the ontologies in the 
+     * 'ontologies'' parameter. If any ontology in this collection contains 
+     * imports, these are *NOT* traversed -- that is, the resulting ontology 
+     * contains *EXACTLY* the axioms explciitly present in the supplied 
+     * ontologies. The resulting DL ontology has the URI ontologyURI.
      */
-    public Reasoner(Configuration configuration,OWLOntologyManager ontologyManger,Collection<OWLOntology> importClosure,String ontologyURI) {
-        OWLClausification clausifier=new OWLClausification(configuration);
-        Set<OWLHasKeyDummy> keys=Collections.emptySet();
+    public Reasoner(Configuration configuration,
+                    OWLOntologyManager ontologyManger,
+                    Collection<OWLOntology> importClosure,
+                    String ontologyURI) {
+        OWLClausification clausifier = new OWLClausification(configuration);
+        Set<OWLHasKeyDummy> keys = Collections.emptySet();
         Set<DescriptionGraph> dgs = Collections.emptySet();
-        m_configuration=configuration;
-        m_dlOntology=clausifier.clausifyImportClosure(ontologyManger.getOWLDataFactory(),ontologyURI,importClosure,dgs,keys);
-        m_namespaces=createNamespaces(m_dlOntology);
-        m_tableau=createTableau(m_configuration,m_dlOntology,m_namespaces);
-        m_subsumptionChecker=new TableauSubsumptionChecker(m_tableau);
-        m_classifier=new Classifier<AtomicConcept>(new TableauFunc(m_subsumptionChecker));
+        this.configuration = configuration;
+        dlOntology = clausifier.clausifyImportClosure
+            (ontologyManger.getOWLDataFactory(), ontologyURI,
+             importClosure, dgs, keys);
+        namespaces = new Namespaces(dlOntology);
+        tableau = createTableau(configuration, dlOntology, namespaces);
     }
 
-    public Reasoner(Configuration configuration,DLOntology dlOntology) {
-        m_configuration=configuration;
-        m_dlOntology=dlOntology;
-        m_namespaces=createNamespaces(m_dlOntology);
-        m_tableau=createTableau(m_configuration,m_dlOntology,m_namespaces);
-        m_subsumptionChecker=new TableauSubsumptionChecker(m_tableau);
-        m_classifier=new Classifier<AtomicConcept>(new TableauFunc(m_subsumptionChecker));
+    public Reasoner(Configuration configuration, DLOntology dlOntology) {
+        this.configuration = configuration;
+        this.dlOntology = dlOntology;
+        namespaces = new Namespaces(dlOntology);
+        tableau = createTableau(configuration, dlOntology, namespaces);
     }
 
-    // General accessor methods
-    
-    public Namespaces getNamespaces() {
-        return m_namespaces;
-    }
-
-    public DLOntology getDLOntology() {
-        return m_dlOntology;
-    }
-
-    public Configuration getConfiguration() {
-        return m_configuration.clone();
-    }
-    
     /**
      * Return `true` iff `classUri` occurred in the loaded knowledge base.
      */
     public boolean isClassNameDefined(String classUri) {
-        return m_dlOntology.getAllAtomicConcepts().contains(AtomicConcept.create(classUri)) || classUri.equals(AtomicConcept.THING.getURI()) || classUri.equals(AtomicConcept.NOTHING.getURI());
+        return dlOntology.getAllAtomicConcepts().contains
+                    (AtomicConcept.create(classUri))
+            || classUri.equals(AtomicConcept.THING.getURI())
+            || classUri.equals(AtomicConcept.NOTHING.getURI());
+    }
+    
+    public Set<String> getDefinedClassNames() {
+        Set<String> out = new HashSet<String>();
+        out.add(AtomicConcept.THING.getURI());
+        out.add(AtomicConcept.NOTHING.getURI());
+        for (AtomicConcept c : dlOntology.getAllAtomicConcepts()) {
+            if (!Namespaces.isInternalURI(c.getURI())) {
+                out.add(c.getURI());
+            }
+        }
+        return out;
     }
 
     // General inferences
     
     public boolean isConsistent() {
-        return m_tableau.isABoxSatisfiable();
+        return tableau.isABoxSatisfiable();
     }
 
     // Concept inferences
     
     public boolean isClassSatisfiable(String classURI) {
-        return m_subsumptionChecker.isSatisfiable(AtomicConcept.create(classURI));
+        return tableau.isSatisfiable(AtomicConcept.create(classURI));
     }
 
-    public boolean isClassSatisfiable(OWLDescription description) {
-        if (description instanceof OWLClass)
-            return isClassSatisfiable(((OWLClass)description).getURI().toString());
-        else {
-            OWLOntologyManager ontologyManager=OWLManager.createOWLOntologyManager();
-            OWLDataFactory factory=ontologyManager.getOWLDataFactory();
-            OWLClass newClass=factory.getOWLClass(URI.create("internal:query-concept"));
-            OWLAxiom classDefinitionAxiom=factory.getOWLSubClassAxiom(newClass,description);
-            DLOntology newDLOntology=extendDLOntology(m_configuration,m_namespaces,"uri:urn:internal-kb",m_dlOntology,ontologyManager,classDefinitionAxiom);
-            Tableau tableau=createTableau(m_configuration,newDLOntology,m_namespaces);
-            return tableau.isSatisfiable(AtomicConcept.create("internal:query-concept"));
+    public boolean isSatisfiable(OWLDescription description) {
+        if (description instanceof OWLClass) {
+            return isClassSatisfiable(((OWLClass) description).getURI().toString());
+        } else {
+            OWLOntologyManager ontologyManager = OWLManager.createOWLOntologyManager();
+            OWLDataFactory factory = ontologyManager.getOWLDataFactory();
+            OWLClass newClass = factory.getOWLClass(URI.create("internal:query-concept"));
+            OWLAxiom classDefinitionAxiom = factory.getOWLSubClassAxiom(newClass,description);
+            DLOntology newDLOntology = extendDLOntology(configuration,
+                                                        namespaces,
+                                                        "uri:urn:internal-kb",
+                                                        dlOntology,
+                                                        ontologyManager,
+                                                        classDefinitionAxiom);
+            Tableau tempTableau
+                = createTableau(configuration, newDLOntology, namespaces);
+            return tempTableau.isSatisfiable
+                    (AtomicConcept.create("internal:query-concept"));
         }
     }
 
     public boolean isClassSubsumedBy(String childName,String parentName) {
-        return m_subsumptionChecker.isSubsumedBy(AtomicConcept.create(childName),AtomicConcept.create(parentName));
+        return tableau.isSubsumedBy(AtomicConcept.create(childName),
+                                    AtomicConcept.create(parentName));
     }
 
-    public boolean isClassSubsumedBy(OWLDescription subDescription,OWLDescription superDescription) {
-        if (subDescription instanceof OWLClass && superDescription instanceof OWLClass)
-            return isClassSubsumedBy(((OWLClass)subDescription).getURI().toString(),((OWLClass)superDescription).getURI().toString());
-        else {
-            OWLOntologyManager ontologyManager=OWLManager.createOWLOntologyManager();
-            OWLDataFactory factory=ontologyManager.getOWLDataFactory();
-            OWLClass newSubConcept=factory.getOWLClass(URI.create("internal:query-subconcept"));
-            OWLAxiom subClassDefinitionAxiom=factory.getOWLSubClassAxiom(newSubConcept,subDescription);
-            OWLClass newSuperConcept=factory.getOWLClass(URI.create("internal:query-superconcept"));
-            OWLAxiom superClassDefinitionAxiom=factory.getOWLSubClassAxiom(superDescription,newSuperConcept);
-            DLOntology newDLOntology=extendDLOntology(m_configuration,m_namespaces,"uri:urn:internal-kb",m_dlOntology,ontologyManager,subClassDefinitionAxiom,superClassDefinitionAxiom);
-            Tableau tableau=createTableau(m_configuration,newDLOntology,m_namespaces);
-            return tableau.isSubsumedBy(AtomicConcept.create("internal:query-subconcept"),AtomicConcept.create("internal:query-superconcept"));
+    public boolean isSubsumedBy(OWLDescription subDescription,
+                                OWLDescription superDescription) {
+        if (   subDescription instanceof OWLClass
+            && superDescription instanceof OWLClass) {
+            return isClassSubsumedBy(
+                        ((OWLClass) subDescription).getURI().toString(),
+                        ((OWLClass) superDescription).getURI().toString()
+                    );
+        } else {
+            OWLOntologyManager ontologyManager
+                = OWLManager.createOWLOntologyManager();
+            OWLDataFactory factory = ontologyManager.getOWLDataFactory();
+            OWLClass newSubConcept
+                = factory.getOWLClass(URI.create("internal:query-subconcept"));
+            OWLAxiom subClassDefinitionAxiom
+                = factory.getOWLSubClassAxiom(newSubConcept,subDescription);
+            OWLClass newSuperConcept
+                = factory.getOWLClass(URI.create("internal:query-superconcept"));
+            OWLAxiom superClassDefinitionAxiom
+                = factory.getOWLSubClassAxiom(superDescription,newSuperConcept);
+            DLOntology newDLOntology = extendDLOntology(configuration,
+                                                        namespaces,
+                                                        "uri:urn:internal-kb",
+                                                        dlOntology,
+                                                        ontologyManager,
+                                                        subClassDefinitionAxiom,
+                                                        superClassDefinitionAxiom);
+            Tableau tempTableau
+                = createTableau(configuration, newDLOntology, namespaces);
+            return tempTableau.isSubsumedBy(
+                    AtomicConcept.create("internal:query-subconcept"),
+                    AtomicConcept.create("internal:query-superconcept")
+            );
         }
     }
 
     // Concept hierarchy
 
-    public void computeClassHierarchy() {
-        getClassHierarchy();
+    @Deprecated
+    public HierarchyPosition<String> getClassHierarchyPosition(String className) {
+        return getHierarchyPositionForClass(className);
+    }
+    
+    public HierarchyPosition<String> getHierarchyPositionForClass(String className)
+        throws IllegalArgumentException {
+        if (!isClassNameDefined(className)) {
+            throw new IllegalArgumentException(
+                "Class '" + className + "' does not occur in the loaded ontology."
+            );
+        }
+        return new TranslatedHierarchyPosition<AtomicConcept, String>
+            (getHierarchyPosition(AtomicConcept.create(className)),
+             new ConceptToString());
     }
 
-    public boolean isClassHierarchyComputed() {
-        return m_atomicConceptHierarchy!=null;
-    }
-
-    public Map<String,HierarchyPosition<String>> getClassHierarchy() {
-        return new TranslatedMap<AtomicConcept,String,HierarchyPosition<AtomicConcept>,HierarchyPosition<String>>(getAtomicConceptHierarchy(),new ConceptToString(),new StringToConcept(),new PositionTranslator<AtomicConcept,String>(new ConceptToString()));
-    }
-
-    public HierarchyPosition<String> getClassHierarchyPosition(String className) throws IllegalArgumentException{
-        if (!isClassNameDefined(className))
-            throw new IllegalArgumentException("Class '"+className+"' does not occur in the loaded ontology.");
-        return getClassHierarchy().get(className);
-    }
-
-    public HierarchyPosition<OWLClass> getClassHierarchyPosition(OWLDescription description) {
-        OWLOntologyManager ontologyManager=OWLManager.createOWLOntologyManager();
-        OWLDataFactory factory=ontologyManager.getOWLDataFactory();
+    public HierarchyPosition<OWLClass> getHierarchyPosition(OWLDescription description) {
+        OWLOntologyManager ontologyManager
+            = OWLManager.createOWLOntologyManager();
+        OWLDataFactory factory = ontologyManager.getOWLDataFactory();
         HierarchyPosition<AtomicConcept> hierarchyPosition;
         if (description instanceof OWLClass) {
-            AtomicConcept atomicConcept=AtomicConcept.create(((OWLClass)description).getURI().toString());
-            hierarchyPosition=getConceptHierarchyPosition(atomicConcept);
+            AtomicConcept atomicConcept
+                = AtomicConcept.create(
+                        ((OWLClass) description).getURI().toString());
+            hierarchyPosition = getHierarchyPosition(atomicConcept);
+        } else {
+            OWLClass newClass
+                = factory.getOWLClass(URI.create("internal:query-concept"));
+            OWLAxiom classDefinitionAxiom
+                = factory.getOWLEquivalentClassesAxiom(newClass,description);
+            DLOntology newDLOntology
+                = extendDLOntology(configuration,
+                                   namespaces,
+                                   "uri:urn:internal-kb",
+                                   dlOntology,
+                                   ontologyManager,
+                                   classDefinitionAxiom);
+            Tableau tempTableau
+                = createTableau(configuration, newDLOntology, namespaces);
+            hierarchyPosition = getHierarchyPosition(
+                AtomicConcept.create("internal:query-concept"), tempTableau);
         }
-        else {
-            Map<AtomicConcept,HierarchyPosition<AtomicConcept>> atomicConceptHierarchy=getAtomicConceptHierarchy();
-            OWLClass newClass=factory.getOWLClass(URI.create("internal:query-concept"));
-            OWLAxiom classDefinitionAxiom=factory.getOWLEquivalentClassesAxiom(newClass,description);
-            DLOntology newDLOntology=extendDLOntology(m_configuration,m_namespaces,"uri:urn:internal-kb",m_dlOntology,ontologyManager,classDefinitionAxiom);
-            Tableau tableau=createTableau(m_configuration,newDLOntology,m_namespaces);
-            Classifier<AtomicConcept> classifier=new Classifier<AtomicConcept>(new TableauFunc(new TableauSubsumptionChecker(tableau)));
-            hierarchyPosition=classifier.findPosition(AtomicConcept.create("internal:query-concept"),atomicConceptHierarchy.get(AtomicConcept.THING),atomicConceptHierarchy.get(AtomicConcept.NOTHING));
-        }
-        return new TranslatedHierarchyPosition<AtomicConcept,OWLClass>(hierarchyPosition,new ConceptToOWLClass(factory));
+        return new TranslatedHierarchyPosition<AtomicConcept,OWLClass>
+            (hierarchyPosition, new ConceptToOWLClass(factory));
     }
 
-    protected Map<AtomicConcept,HierarchyPosition<AtomicConcept>> getAtomicConceptHierarchy() {
-        if (m_atomicConceptHierarchy==null) {
-            Collection<AtomicConcept> concepts=new ArrayList<AtomicConcept>();
-            concepts.add(AtomicConcept.THING);
-            concepts.add(AtomicConcept.NOTHING);
-            for (AtomicConcept c : m_dlOntology.getAllAtomicConcepts())
-                if (!Namespaces.isInternalURI(c.getURI()))
-                    concepts.add(c);
-            if (m_dlOntology.isHorn()) {
-                ReasoningCache cache=new ReasoningCache();
-                cache.seed(concepts,m_tableau);
-                if (cache.allSubsumptionsKnown(concepts)) {
-                    GraphUtils.Acyclic<AtomicConcept> acyc=new GraphUtils.Acyclic<AtomicConcept>(cache.knownSubsumers);
-                    GraphUtils.TransAnalyzed<AtomicConcept> trans=new GraphUtils.TransAnalyzed<AtomicConcept>(acyc.graph);
-                    m_atomicConceptHierarchy=new HashMap<AtomicConcept,HierarchyPosition<AtomicConcept>>();
-                    for (AtomicConcept c : trans.reduced.keySet()) {
-                        NaiveHierarchyPosition<AtomicConcept> pos=new NaiveHierarchyPosition<AtomicConcept>(acyc.equivs.get(c));
-                        for (AtomicConcept equiv : acyc.equivs.get(c)) {
-                            assert acyc.canonical.get(equiv)==c;
-                            assert pos.labels.contains(equiv);
-                            m_atomicConceptHierarchy.put(equiv,pos);
-                        }
-                    }
-                    for (AtomicConcept c : concepts) {
-                        AtomicConcept canonicalName=acyc.canonical.get(c);
-                        NaiveHierarchyPosition<AtomicConcept> pos=(NaiveHierarchyPosition<AtomicConcept>)m_atomicConceptHierarchy.get(canonicalName);
-                        if (pos==null) {
-                            pos=new NaiveHierarchyPosition<AtomicConcept>(canonicalName);
-                            m_atomicConceptHierarchy.put(canonicalName,pos);
-                        }
-                        pos.labels.add(c);
-                        m_atomicConceptHierarchy.put(c,pos);
-                    }
-                    if (!m_atomicConceptHierarchy.containsKey(AtomicConcept.THING))
-                        m_atomicConceptHierarchy.put(AtomicConcept.THING,new NaiveHierarchyPosition<AtomicConcept>(AtomicConcept.THING));
-                    for (Map.Entry<AtomicConcept,Set<AtomicConcept>> e : trans.reduced.entrySet()) {
-                        AtomicConcept child=e.getKey();
-                        for (AtomicConcept parent : e.getValue()) {
-                            ((NaiveHierarchyPosition<AtomicConcept>)m_atomicConceptHierarchy.get(child)).parents.add(m_atomicConceptHierarchy.get(parent));
-                            ((NaiveHierarchyPosition<AtomicConcept>)m_atomicConceptHierarchy.get(parent)).children.add(m_atomicConceptHierarchy.get(child));
-                        }
-                    }
+    private HierarchyPosition<AtomicConcept>
+        getHierarchyPosition(AtomicConcept atomicConcept) {
+        return getHierarchyPosition(atomicConcept, tableau);
+    }
+    
+    private HierarchyPosition<AtomicConcept>
+        getHierarchyPosition(final AtomicConcept concept,
+                             final Tableau tableau) {
+        return getConceptHierarchy().getPosition(
+            new Hierarchy.Element<AtomicConcept>() {
+                public boolean doesPrecede(AtomicConcept other) {
+                    return tableau.isSubsumedBy(concept, other);
                 }
-            }
-            if (m_atomicConceptHierarchy==null)
-                m_atomicConceptHierarchy=m_classifier.buildHierarchy(AtomicConcept.THING,AtomicConcept.NOTHING,concepts);
-        }
-        return m_atomicConceptHierarchy;
-    }
-
-    protected HierarchyPosition<AtomicConcept> getConceptHierarchyPosition(AtomicConcept atomicConcept) {
-        HierarchyPosition<AtomicConcept> result=getAtomicConceptHierarchy().get(atomicConcept);
-        if (result==null)
-            result=m_classifier.findPosition(atomicConcept,getAtomicConceptHierarchy().get(AtomicConcept.THING),getAtomicConceptHierarchy().get(AtomicConcept.NOTHING));
-        return result;
-    }
-
-    public void printSortedAncestorLists(PrintWriter output) {
-        printSortedAncestorLists(output,getClassHierarchy());
-    }
-
-    public static void printSortedAncestorLists(PrintWriter output,Map<String,HierarchyPosition<String>> taxonomy) {
-        Map<String,Set<String>> flat=new TreeMap<String,Set<String>>();
-        for (Map.Entry<String,HierarchyPosition<String>> e : taxonomy.entrySet()) {
-            if (!e.getKey().equals("http://www.w3.org/2002/07/owl#Nothing")) {
-                Set<String> ancestors=new TreeSet<String>();
-                for (String ancestor : e.getValue().getAncestors())
-                    if (!"http://www.w3.org/2002/07/owl#Thing".equals(ancestor))
-                        ancestors.add(ancestor);
-                flat.put(e.getKey(),ancestors);
-            }
-        }
-        try {
-            for (Map.Entry<String,Set<String>> e : flat.entrySet()) {
-                output.println(e.getKey());
-                for (String ancestor : e.getValue()) {
-                    output.print("    ");
-                    output.println(ancestor);
+                public boolean doesSucceed(AtomicConcept other) {
+                    return tableau.isSubsumedBy(other, concept);
                 }
-                output.println("--------------------------------");
-            }
-            output.println("! THE END !");
-        }
-        finally {
-            output.flush();
-        }
+                public AtomicConcept getEquivalent() {
+                    return concept;
+                }
+            });
     }
-
+    
     // Object property inferences
     
     public boolean isAsymmetric(OWLObjectProperty p) {
-        return m_tableau.isAsymmetric(AtomicRole.createAtomicRole(p.getURI().toString()));
+        return tableau.isAsymmetric(
+            AtomicRole.createAtomicRole(p.getURI().toString()));
     }
 
     // Property hierarchy
     
-    public void computePropertyHierarchy() {
-        getAtomicRoleHierarchy();
-    }
-
-    public boolean isPropertyHierarchyComputed() {
-        return m_atomicRoleHierarchy!=null;
-    }
-
+    @Deprecated
     public HierarchyPosition<String> getPropertyHierarchyPosition(String propertyURI) {
-        AtomicRole atomicRole=AtomicRole.createAtomicRole(propertyURI);
-        if (m_dlOntology.getAllAtomicDataRoles().contains(atomicRole))
-            return new TranslatedHierarchyPosition<AtomicRole,String>(getAtomicRoleHierarchyPosition(AtomicRole.createAtomicRole(propertyURI),AtomicRole.TOP_DATA_ROLE,AtomicRole.BOTTOM_DATA_ROLE),new RoleToString());
-        else
-            return new TranslatedHierarchyPosition<AtomicRole,String>(getAtomicRoleHierarchyPosition(AtomicRole.createAtomicRole(propertyURI),AtomicRole.TOP_OBJECT_ROLE,AtomicRole.BOTTOM_OBJECT_ROLE),new RoleToString());
+        return getHierarchyPositionForProperty(propertyURI);
     }
     
-    public HierarchyPosition<OWLObjectProperty> getPropertyHierarchyPosition(OWLObjectProperty p) {
+    public HierarchyPosition<String> getHierarchyPositionForProperty(String propertyURI) {
+        AtomicRole atomicRole=AtomicRole.createAtomicRole(propertyURI);
+        if (dlOntology.getAllAtomicDataRoles().contains(atomicRole))
+            return new TranslatedHierarchyPosition<AtomicRole,String>(getHierarchyPosition(AtomicRole.createAtomicRole(propertyURI),AtomicRole.TOP_DATA_ROLE,AtomicRole.BOTTOM_DATA_ROLE),new RoleToString());
+        else
+            return new TranslatedHierarchyPosition<AtomicRole,String>(getHierarchyPosition(AtomicRole.createAtomicRole(propertyURI),AtomicRole.TOP_OBJECT_ROLE,AtomicRole.BOTTOM_OBJECT_ROLE),new RoleToString());
+    }
+    
+    public HierarchyPosition<OWLObjectProperty> getHierarchyPosition(OWLObjectProperty p) {
         OWLDataFactory factory=OWLManager.createOWLOntologyManager().getOWLDataFactory();
-        return new TranslatedHierarchyPosition<AtomicRole,OWLObjectProperty>(getAtomicRoleHierarchyPosition(AtomicRole.createAtomicRole(p.getURI().toString()),AtomicRole.TOP_OBJECT_ROLE,AtomicRole.BOTTOM_OBJECT_ROLE),new RoleToOWLObjectProperty(factory));
+        return new TranslatedHierarchyPosition<AtomicRole,OWLObjectProperty>(getHierarchyPosition(AtomicRole.createAtomicRole(p.getURI().toString()),AtomicRole.TOP_OBJECT_ROLE,AtomicRole.BOTTOM_OBJECT_ROLE),new RoleToOWLObjectProperty(factory));
     }
 
-    public HierarchyPosition<OWLDataProperty> getPropertyHierarchyPosition(OWLDataProperty p) {
+    public HierarchyPosition<OWLDataProperty> getHierarchyPosition(OWLDataProperty p) {
         OWLDataFactory factory=OWLManager.createOWLOntologyManager().getOWLDataFactory();
-        return new TranslatedHierarchyPosition<AtomicRole,OWLDataProperty>(getAtomicRoleHierarchyPosition(AtomicRole.createAtomicRole(p.getURI().toString()),AtomicRole.TOP_DATA_ROLE,AtomicRole.BOTTOM_DATA_ROLE),new RoleToOWLDataProperty(factory));
+        return new TranslatedHierarchyPosition<AtomicRole,OWLDataProperty>(getHierarchyPosition(AtomicRole.createAtomicRole(p.getURI().toString()),AtomicRole.TOP_DATA_ROLE,AtomicRole.BOTTOM_DATA_ROLE),new RoleToOWLDataProperty(factory));
     }
 
-    protected Map<AtomicRole,HierarchyPosition<AtomicRole>> getAtomicRoleHierarchy() {
-        if (m_atomicRoleHierarchy==null) {
+    private Map<AtomicRole,HierarchyPosition<AtomicRole>> getRoleHierarchy() {
+        if (roleHierarchy==null) {
             final Map<Role,Set<Role>> subRoles=new HashMap<Role,Set<Role>>();
-            for (DLClause dlClause : m_dlOntology.getDLClauses()) {
+            for (DLClause dlClause : dlOntology.getDLClauses()) {
                 if (dlClause.isRoleInclusion()) {
                     Role sub=(Role)dlClause.getBodyAtom(0).getDLPredicate();
                     Role sup=(Role)dlClause.getHeadAtom(0).getDLPredicate();
@@ -425,13 +498,13 @@ public class Reasoner implements Serializable {
                     return subs.contains(sub);
                 }
             };
-            m_atomicRoleHierarchy=NaiveHierarchyPosition.buildHierarchy(AtomicRole.TOP_OBJECT_ROLE,AtomicRole.BOTTOM_OBJECT_ROLE,m_dlOntology.getAllAtomicObjectRoles(),ordering);
-            m_atomicRoleHierarchy.putAll(NaiveHierarchyPosition.buildHierarchy(AtomicRole.TOP_DATA_ROLE,AtomicRole.BOTTOM_DATA_ROLE,m_dlOntology.getAllAtomicDataRoles(),ordering));
+            roleHierarchy=NaiveHierarchyPosition.buildHierarchy(AtomicRole.TOP_OBJECT_ROLE,AtomicRole.BOTTOM_OBJECT_ROLE,dlOntology.getAllAtomicObjectRoles(),ordering);
+            roleHierarchy.putAll(NaiveHierarchyPosition.buildHierarchy(AtomicRole.TOP_DATA_ROLE,AtomicRole.BOTTOM_DATA_ROLE,dlOntology.getAllAtomicDataRoles(),ordering));
         }
-        return m_atomicRoleHierarchy;
+        return roleHierarchy;
     }
 
-    protected static void addInclusion(Map<Role,Set<Role>> subRoles,Role sub,Role sup) {
+    private static void addInclusion(Map<Role,Set<Role>> subRoles,Role sub,Role sup) {
         Set<Role> subs=subRoles.get(sup);
         if (subs==null) {
             subs=new HashSet<Role>();
@@ -440,12 +513,12 @@ public class Reasoner implements Serializable {
         subs.add(sub);
     }
 
-    protected HierarchyPosition<AtomicRole> getAtomicRoleHierarchyPosition(AtomicRole r,AtomicRole topRole,AtomicRole bottomRole) {
-        HierarchyPosition<AtomicRole> out=getAtomicRoleHierarchy().get(r);
+    private HierarchyPosition<AtomicRole> getHierarchyPosition(AtomicRole r,AtomicRole topRole,AtomicRole bottomRole) {
+        HierarchyPosition<AtomicRole> out=getRoleHierarchy().get(r);
         if (out==null) {
             NaiveHierarchyPosition<AtomicRole> newPos=new NaiveHierarchyPosition<AtomicRole>(r);
-            newPos.parents.add(getAtomicRoleHierarchy().get(topRole));
-            newPos.children.add(getAtomicRoleHierarchy().get(bottomRole));
+            newPos.parents.add(getRoleHierarchy().get(topRole));
+            newPos.children.add(getRoleHierarchy().get(bottomRole));
             out=newPos;
         }
         return out;
@@ -453,64 +526,62 @@ public class Reasoner implements Serializable {
 
     // Individual inferences
     
-    public boolean isInstanceOf(String classURI,String individualURI) {
-        return m_tableau.isInstanceOf(AtomicConcept.create(classURI),Individual.create(individualURI));
+    public boolean isIndividualInstanceOfClass(String individualURI,
+                                             String classURI) {
+        return tableau.isInstanceOf(Individual.create(individualURI),
+                                    AtomicConcept.create(classURI));
     }
     
-    public boolean isInstanceOf(OWLDescription description,OWLIndividual individual) {
+    public boolean isInstanceOf(OWLIndividual individual,
+                                OWLDescription description) {
         if (description instanceof OWLClass)
-            return isInstanceOf(((OWLClass)description).getURI().toString(),individual.getURI().toString());
+            return isIndividualInstanceOfClass(individual.getURI().toString(), ((OWLClass)description).getURI().toString());
         else {
             OWLOntologyManager ontologyManager=OWLManager.createOWLOntologyManager();
             OWLDataFactory factory=ontologyManager.getOWLDataFactory();
             OWLClass newClass=factory.getOWLClass(URI.create("internal:query-concept"));
             OWLAxiom classDefinitionAxiom=factory.getOWLSubClassAxiom(description,newClass);
-            DLOntology newDLOntology=extendDLOntology(m_configuration,m_namespaces,"uri:urn:internal-kb",m_dlOntology,ontologyManager,classDefinitionAxiom);
-            Tableau tableau=createTableau(m_configuration,newDLOntology,m_namespaces);
-            return tableau.isInstanceOf(AtomicConcept.create("internal:query-concept"),Individual.create(individual.getURI().toString()));
+            DLOntology newDLOntology=extendDLOntology(configuration,namespaces,"uri:urn:internal-kb",dlOntology,ontologyManager,classDefinitionAxiom);
+            Tableau tableau=createTableau(configuration,newDLOntology,namespaces);
+            return tableau.isInstanceOf(
+                Individual.create(individual.getURI().toString()),
+                AtomicConcept.create("internal:query-concept"));
         }
     }
     
-    public void computeRealization() {
-        getRealization();
+    public HierarchyPosition<String> getHierarchyPositionOfIndividual(String individual) {
+        return new TranslatedHierarchyPosition<AtomicConcept, String>
+            (getHierarchyPosition(Individual.create(individual)),
+             new ConceptToString());
     }
 
-    public boolean isRealizationComputed() {
-        return m_realization!=null;
-    }
-
-    public Set<HierarchyPosition<String>> getIndividualTypes(String individual) {
-        Set<HierarchyPosition<AtomicConcept>> directSuperConceptPositions=getDirectSuperConceptPositions(Individual.create(individual));
-        Set<HierarchyPosition<String>> result=new HashSet<HierarchyPosition<String>>();
-        for (HierarchyPosition<AtomicConcept> hierarchyPosition : directSuperConceptPositions)
-            result.add(new TranslatedHierarchyPosition<AtomicConcept,String>(hierarchyPosition,new ConceptToString()));
-        return result;
-    }
-
-    public Set<HierarchyPosition<OWLClass>> getIndividualTypes(OWLIndividual individual) {
-        Set<HierarchyPosition<AtomicConcept>> directSuperConceptPositions=getDirectSuperConceptPositions(Individual.create(individual.getURI().toString()));
+    public HierarchyPosition<OWLClass> getHierarchyPosition(OWLIndividual individual) {
         OWLDataFactory factory=OWLManager.createOWLOntologyManager().getOWLDataFactory();
-        Set<HierarchyPosition<OWLClass>> result=new HashSet<HierarchyPosition<OWLClass>>();
-        for (HierarchyPosition<AtomicConcept> hierarchyPosition : directSuperConceptPositions)
-            result.add(new TranslatedHierarchyPosition<AtomicConcept,OWLClass>(hierarchyPosition,new ConceptToOWLClass(factory)));
-        return result;
+        return new TranslatedHierarchyPosition<AtomicConcept,OWLClass>
+            (getHierarchyPosition(Individual.create(individual.getURI().toString())),
+             new ConceptToOWLClass(factory));
     }
 
-    public Set<String> getClassInstances(String className) {
+    public Set<String> getMembersOfClass(String className) {
         Set<String> result=new HashSet<String>();
-        for (AtomicConcept atomicConcept : getConceptHierarchyPosition(AtomicConcept.create(className)).getDescendants()) {
-            Set<Individual> realizationForConcept=getRealization().get(atomicConcept);
-            // realizationForConcept could be null because of the way realization is constructed;
-            // for example, concepts that don't have direct instances are not entered into the realization at all.
-            if (realizationForConcept!=null)
-                for (Individual individual : realizationForConcept)
+        for (AtomicConcept atomicConcept :
+                getHierarchyPosition(AtomicConcept.create(className)).getDescendants()) {
+            Set<Individual> realizationForConcept
+                = getRealization().get(atomicConcept);
+            // realizationForConcept could be null because of the way
+            // realization is constructed; for example, concepts that don't
+            // have direct instances are not entered into the realization at all.
+            if (realizationForConcept != null) {
+                for (Individual individual : realizationForConcept) {
                     result.add(individual.getURI());
+                }
+            }
         }
         return result;
     }
 
-    public Set<OWLIndividual> getClassInstances(OWLDescription description) {
-        HierarchyPosition<OWLClass> hierarchyPosition=getClassHierarchyPosition(description);
+    public Set<OWLIndividual> getMembers(OWLDescription description) {
+        HierarchyPosition<OWLClass> hierarchyPosition = getHierarchyPosition(description);
         OWLDataFactory factory=OWLManager.createOWLOntologyManager().getOWLDataFactory();
         Set<OWLIndividual> result=new HashSet<OWLIndividual>();
         loadIndividualsOfPosition(hierarchyPosition,result,factory);
@@ -519,7 +590,7 @@ public class Reasoner implements Serializable {
         return result;
     }
     
-    protected void loadIndividualsOfPosition(HierarchyPosition<OWLClass> position,Set<OWLIndividual> result,OWLDataFactory factory) {
+    private void loadIndividualsOfPosition(HierarchyPosition<OWLClass> position,Set<OWLIndividual> result,OWLDataFactory factory) {
         AtomicConcept atomicConcept=AtomicConcept.create(position.getEquivalents().iterator().next().getURI().toString());
         Set<Individual> realizationForConcept=getRealization().get(atomicConcept);
         // realizationForConcept could be null because of the way realization is constructed;
@@ -529,7 +600,7 @@ public class Reasoner implements Serializable {
                 result.add(factory.getOWLIndividual(URI.create(individual.getURI())));
     }
     
-    public Set<String> getClassDirectInstances(String className) {
+    public Set<String> getDirectMembersOfClass(String className) {
         Set<String> result=new HashSet<String>();
         Set<Individual> realizationForConcept=getRealization().get(AtomicConcept.create(className));
         // realizationForConcept could be null because of the way realization is constructed;
@@ -540,8 +611,8 @@ public class Reasoner implements Serializable {
         return result;
     }
 
-    public Set<OWLIndividual> getClassDirectInstances(OWLDescription description) {
-        HierarchyPosition<OWLClass> hierarchyPosition=getClassHierarchyPosition(description);
+    public Set<OWLIndividual> getDirectMembers(OWLDescription description) {
+        HierarchyPosition<OWLClass> hierarchyPosition=getHierarchyPosition(description);
         OWLDataFactory factory=OWLManager.createOWLOntologyManager().getOWLDataFactory();
         Set<OWLIndividual> result=new HashSet<OWLIndividual>();
         Map<AtomicConcept,Set<Individual>> realization=getRealization();
@@ -560,52 +631,48 @@ public class Reasoner implements Serializable {
         return result;
     }
 
-    protected Map<AtomicConcept,Set<Individual>> getRealization() {
-        if (m_realization==null) {
-            m_realization=new HashMap<AtomicConcept,Set<Individual>>();
-            for (Individual individual : m_dlOntology.getAllIndividuals()) {
-                Set<HierarchyPosition<AtomicConcept>> directSuperConceptPositions=getDirectSuperConceptPositions(individual);
-                for (HierarchyPosition<AtomicConcept> directSuperConceptPosition : directSuperConceptPositions) {
-                    for (AtomicConcept directSuperConcept : directSuperConceptPosition.getEquivalents()) {
-                        Set<Individual> individuals=m_realization.get(directSuperConcept);
-                        if (individuals==null) {
-                            individuals=new HashSet<Individual>();
-                            m_realization.put(directSuperConcept,individuals);
-                        }
-                        individuals.add(individual);
+    private Map<AtomicConcept, Set<Individual>> getRealization() {
+        if (realization == null) {
+            realization = new HashMap<AtomicConcept,Set<Individual>>();
+            for (Individual individual : dlOntology.getAllIndividuals()) {
+                Set<AtomicConcept> mostSpecific = new HashSet<AtomicConcept>();
+                HierarchyPosition<AtomicConcept> pos = getHierarchyPosition(individual);
+                mostSpecific.addAll(pos.getEquivalents());
+                if (mostSpecific.isEmpty()) {
+                    for (HierarchyPosition<AtomicConcept> parent
+                            : pos.getParentPositions()) {
+                        mostSpecific.addAll(parent.getEquivalents());
                     }
+                }
+                for (AtomicConcept parent : mostSpecific) {
+                    Set<Individual> set = realization.get(parent);
+                    if (set == null) {
+                        set = new HashSet<Individual>();
+                        realization.put(parent, set);
+                    }
+                    set.add(individual);
                 }
             }
         }
-        return m_realization;
+        return realization;
     }
     
-    protected Set<HierarchyPosition<AtomicConcept>> getDirectSuperConceptPositions(final Individual individual) {
-        Classifier.Util<HierarchyPosition<AtomicConcept>> util=new Classifier.Util<HierarchyPosition<AtomicConcept>>() {
-            public Set<HierarchyPosition<AtomicConcept>> nexts(HierarchyPosition<AtomicConcept> u) {
-                return u.getChildPositions();
-            }
-            public Set<HierarchyPosition<AtomicConcept>> prevs(HierarchyPosition<AtomicConcept> u) {
-                return u.getParentPositions();
-            }
-            public boolean trueOf(HierarchyPosition<AtomicConcept> u) {
-                AtomicConcept atomicConcept=u.getEquivalents().iterator().next();
-                if (AtomicConcept.THING.equals(atomicConcept))
-                    return true;
-                else
-                    return m_tableau.isInstanceOf(atomicConcept,individual);
-            }
-        };
-        Set<HierarchyPosition<AtomicConcept>> topPositions=Collections.singleton(getAtomicConceptHierarchy().get(AtomicConcept.THING));
-        return Classifier.search(util,topPositions,null);
+    private HierarchyPosition<AtomicConcept>
+        getHierarchyPosition(Individual individual) {
+        // TODO: implement!
+        // return conceptHierarchy.getPosition(
+        return null;
     }
 
-    protected boolean isInstanceOf(AtomicConcept atomicConcept,Individual individual) {
-        if (AtomicConcept.THING.equals(atomicConcept))
+    private boolean isInstanceOf(Individual i,
+                                   AtomicConcept c) {
+        if (AtomicConcept.THING.equals(c)) {
             return true;
-        else
-            return m_tableau.isInstanceOf(atomicConcept,individual);
+        } else {
+            return tableau.isInstanceOf(i, c);
+        }
     }
+    
     
     // Various creation methods
     
@@ -719,7 +786,13 @@ public class Reasoner implements Serializable {
         return new Tableau(tableauMonitor,existentialsExpansionStrategy,dlOntology,config.parameters);
     }
 
-    protected static DLOntology extendDLOntology(Configuration config,Namespaces namespaces,String resultingOntologyURI,DLOntology originalDLOntology,OWLOntologyManager ontologyManager,OWLAxiom... additionalAxioms) throws IllegalArgumentException {
+    private static DLOntology extendDLOntology(Configuration config,
+                                                 Namespaces namespaces,
+                                                 String resultingOntologyURI,
+                                                 DLOntology originalDLOntology,
+                                                 OWLOntologyManager ontologyManager,
+                                                 OWLAxiom... additionalAxioms)
+        throws IllegalArgumentException {
         try {
             Set<DescriptionGraph> descriptionGraphs=Collections.emptySet();
             OWLDataFactory factory=ontologyManager.getOWLDataFactory();
@@ -810,49 +883,6 @@ public class Reasoner implements Serializable {
         }
     }
     
-    protected static Namespaces createNamespaces(DLOntology dlOntology) {
-        Set<String> namespaceURIs=new HashSet<String>();
-        for (AtomicConcept concept : dlOntology.getAllAtomicConcepts())
-            addURI(concept.getURI(),namespaceURIs);
-        for (AtomicRole atomicRole : dlOntology.getAllAtomicDataRoles())
-            addURI(atomicRole.getURI(),namespaceURIs);
-        for (AtomicRole atomicRole : dlOntology.getAllAtomicObjectRoles())
-            addURI(atomicRole.getURI(),namespaceURIs);
-        for (Individual individual : dlOntology.getAllIndividuals())
-            addURI(individual.getURI(),namespaceURIs);
-        Namespaces namespaces=new Namespaces();
-        namespaces.reegisterSemanticWebPrefixes();
-        namespaces.registerInternalNamespaces(namespaceURIs);
-        namespaces.registerDefaultNamespace(dlOntology.getOntologyURI()+"#");
-        int prefixIndex=0;
-        for (String namespace : namespaceURIs)
-            if (!namespaces.isNamespaceRegistered(namespace)) {
-                String prefix=getPrefixForIndex(prefixIndex);
-                while (namespaces.isPrefixRegistered(prefix))
-                    prefix=getPrefixForIndex(++prefixIndex);
-                namespaces.registerNamespace(prefix,namespace);
-                ++prefixIndex;
-            }
-        return namespaces;
-    }
-    protected static String getPrefixForIndex(int prefixIndex) {
-        StringBuffer buffer=new StringBuffer();
-        while (prefixIndex>=26) {
-            buffer.insert(0,(char)(((int)'a')+(prefixIndex % 26)));
-            prefixIndex/=26;
-        }
-        buffer.insert(0,(char)(((int)'a')+prefixIndex));
-        return buffer.toString();
-    }
-    protected static void addURI(String uri,Set<String> namespaceURIs) {
-        if (!Namespaces.isInternalURI(uri)) {
-            int lastHash=uri.lastIndexOf('#');
-            if (lastHash!=-1) {
-                String namespaceURI=uri.substring(0,lastHash+1);
-                namespaceURIs.add(namespaceURI);
-            }
-        }
-    }
     
     // Loading and saving the Reasoner object
 
@@ -884,7 +914,7 @@ public class Reasoner implements Serializable {
         }
     }
 
-    public static Reasoner loadRasoner(File file) throws IOException {
+    public static Reasoner loadReasoner(File file) throws IOException {
         InputStream inputStream=new BufferedInputStream(new FileInputStream(file));
         try {
             return loadReasoner(inputStream);
@@ -894,6 +924,8 @@ public class Reasoner implements Serializable {
         }
     }
 
+    // Utilities for translating between hierarchy views:
+    
     static class RoleToString implements Translator<AtomicRole,String> {
         public String translate(AtomicRole r) {
             return r.getURI();

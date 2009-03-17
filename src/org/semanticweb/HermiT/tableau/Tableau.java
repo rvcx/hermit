@@ -301,7 +301,7 @@ public final class Tableau implements Serializable {
             m_tableauMonitor.isABoxSatisfiableFinished(result);
         return result;
     }
-    public boolean isInstanceOf(AtomicConcept atomicConcept,Individual individual) {
+    public boolean isInstanceOf(Individual individual, AtomicConcept atomicConcept) {
         if (m_tableauMonitor!=null)
             m_tableauMonitor.isInstanceOfStarted(atomicConcept,individual);
         clear();
