@@ -150,13 +150,10 @@ public class Reasoner implements Serializable {
             }
             Map<AtomicConcept, Set<AtomicConcept>> known
                 = new HashMap<AtomicConcept, Set<AtomicConcept>>();
-            Map<AtomicConcept, Set<AtomicConcept>> possible
-                = new HashMap<AtomicConcept, Set<AtomicConcept>>();
             for (AtomicConcept c : allConcepts) {
                 Set<AtomicConcept> s = new HashSet<AtomicConcept>();
                 s.add(c);
                 known.put(c, s);
-                possible.put(c, new HashSet<AtomicConcept>(allConcepts));
             }
             Taxonomy<AtomicConcept> tax = new Taxonomy<AtomicConcept>(
                 new Taxonomy.Ordering<AtomicConcept>() {
@@ -165,7 +162,7 @@ public class Reasoner implements Serializable {
                         return tableau.isSubsumedBy(child, parent);
                     }
                 },
-                known, possible // TODO: set these!
+                known, null // TODO: set these!
             );
             conceptHierarchy = new TaxonomyHierarchy<AtomicConcept>(tax);
         }

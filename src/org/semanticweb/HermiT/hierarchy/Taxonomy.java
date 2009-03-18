@@ -2,12 +2,14 @@
 package org.semanticweb.HermiT.hierarchy;
 
 import java.util.Map;
+import java.util.HashMap;
 import java.util.Set;
 import java.util.HashSet;
 import java.util.ArrayList;
 import java.util.Iterator;
 import org.semanticweb.HermiT.util.GraphUtils;
 import org.semanticweb.HermiT.util.InducedSubgraph;
+import org.semanticweb.HermiT.util.DifferenceSet;
 
 public class Taxonomy<T> {
     public Map<T, T> canonical;
@@ -43,7 +45,7 @@ public class Taxonomy<T> {
         // Prune based on known relationships:
         for (T u : GraphUtils.topologicalSort(reduced)) {
             Set<T> uPoss = possibleSuccessors.get(u);
-            for (T uprime : reduced_inverse.get(u)) {
+            for (T uprime : GraphUtils.successors(u, reduced_inverse)) {
                 // only need to look at reduced due to topological ordering
                 Set<T> uprimePoss = possibleSuccessors.get(uprime);
                 if (uprimePoss != null) {
@@ -57,7 +59,7 @@ public class Taxonomy<T> {
             }
             if (uPoss != null) {
                 for (T v : new ArrayList<T>(uPoss)) {
-                    if (!uPoss.containsAll(closed.get(v))) {
+                    if (!uPoss.containsAll(GraphUtils.successors(v, closed))) {
                         uPoss.remove(v);
                     }
                 }
@@ -121,7 +123,6 @@ public class Taxonomy<T> {
                 }
             } // end else
         } // end loop over (old) possible edges
-        assert poss.get(t).isEmpty();
     }
 
     private interface Predicate<T> {
@@ -139,8 +140,10 @@ public class Taxonomy<T> {
     private static <T> Set<T> mostGeneral(final Predicate<T> predicate,
                                           final Map<T, Set<T>> graph,
                                           Map<T, Set<T>> inverse) {
+        System.err.println("Searching graph:");
+        GraphUtils.printGraph(graph);
         Predicate<T> cachedPredicate = new Predicate<T>() {
-            Map<T, Boolean> cache;
+            Map<T, Boolean> cache = new HashMap<T, Boolean>();
             boolean compute(T v) {
                 for (T w : GraphUtils.successors(v, graph)) {
                     if (!this.trueOf(w)) return false;
@@ -156,6 +159,7 @@ public class Taxonomy<T> {
         };
         
         Set<T> leaves = new HashSet<T>(inverse.keySet());
+        leaves.addAll(graph.keySet());
         for (Map.Entry<T, Set<T>> e : graph.entrySet()) {
             if (!e.getValue().isEmpty()) {
                 leaves.remove(e.getKey());
@@ -230,36 +234,82 @@ public class Taxonomy<T> {
                     Map<T, Set<T>> knownSuccessors, // can't be null
                     Map<T, Set<T>> possibleSuccessors) {
         assert knownSuccessors != null;
-        assert GraphUtils.isSubgraphOf(knownSuccessors, possibleSuccessors);
+        if (possibleSuccessors == null) {
+            possibleSuccessors = new HashMap<T, Set<T>>();
+        }
+        
+        for (T t : knownSuccessors.keySet()) {
+            GraphUtils.successorSet(t, knownSuccessors).add(t);
+        }
         
         GraphUtils.Acyclic<T> acyc
-            = new GraphUtils.Acyclic<T>(knownSuccessors);
+            = new GraphUtils.Acyclic<T>(knownSuccessors, true);
         canonical = acyc.canonical;
         equivs = acyc.equivs;
         GraphUtils.TransAnalyzed<T> analyzed
             = new GraphUtils.TransAnalyzed<T>(acyc.graph);
         reduced = analyzed.reduced;
+        for (T t : knownSuccessors.keySet()) {
+            GraphUtils.successorSet(t, reduced);
+        }
         reduced_inverse = GraphUtils.reversed(reduced);
         closed = analyzed.closed;
         closed_inverse = GraphUtils.reversed(closed);
-        
-        prunePossibles(possibleSuccessors);
+        System.err.println("Initial closed:");
+        GraphUtils.printGraph(closed);
         
         Map<T, Set<T>> poss = possibleSuccessors;
         Map<T, Set<T>> poss_inv = GraphUtils.reversed(poss);
-        
-        Taxonomy<T> tax_inv = new Taxonomy<T>(this);
 
-        for (T t : closed.keySet()) { // might want to sort this...
+        {
+            Set<T> allTs = knownSuccessors.keySet();
+            Set<T> anySuccs = new HashSet<T>();
+            for (T t : allTs) {
+                Set<T> succs = possibleSuccessors.get(t);
+                if (succs == null) {
+                    anySuccs.add(t);
+                    possibleSuccessors.put(t, new DifferenceSet<T>(allTs));
+                }
+            }
+            assert GraphUtils.isSubgraphOf(knownSuccessors, possibleSuccessors);
+
+            for (T t : allTs) {
+                Set<T> preds = poss_inv.get(t);
+                if (anySuccs.size() > allTs.size()/2) {
+                    Set<T> newPreds = new DifferenceSet<T>(anySuccs);
+                    if (preds != null) {
+                        newPreds.addAll(preds);
+                    }
+                    poss_inv.put(t, newPreds);
+                } else {
+                    if (preds == null) {
+                        preds = new HashSet<T>();
+                        poss_inv.put(t, preds);
+                    }
+                    preds.addAll(anySuccs);
+                }
+            }
+        }
+
+        prunePossibles(poss);
+        Taxonomy<T> tax_inv = new Taxonomy<T>(this);
+        tax_inv.prunePossibles(poss_inv);
+
+        for (T t : equivs.keySet()) { // might want to sort this...
+            System.err.println("classifying " + t.toString());
+            GraphUtils.printGraph(reduced);
+            System.err.println("possible:");
+            GraphUtils.printGraph(poss);
             final T finalT = t;
             Set<T> succs = newSuccessors
                 (t,
                  new Predicate<T>() {
                      public boolean trueOf(T u) {
-                         return order.doesPrecede(finalT, u);
+                         return !u.equals(finalT) && order.doesPrecede(finalT, u);
                      }
                  },
                  poss);
+            System.err.println("found successors: " + succs.toString());
             updateClosure(t, succs);
             prunePossibles(t, poss, poss_inv);
             
@@ -267,15 +317,16 @@ public class Taxonomy<T> {
                 (t,
                  new Predicate<T>() {
                      public boolean trueOf(T u) {
-                         return order.doesPrecede(u, finalT);
+                         return !u.equals(finalT) && order.doesPrecede(u, finalT);
                      }
                  },
                  poss_inv);
+            System.err.println("found predecessors: " + preds.toString());
             tax_inv.updateClosure(t, preds);
             tax_inv.prunePossibles(t, poss_inv, poss);
             
             // Update reduced:
-            if (succs.equals(preds)) {
+            if (!succs.isEmpty() && succs.equals(preds)) {
                 assert succs.size() == 1 && preds.size() == 1;
                 T tCanonical = succs.iterator().next();
                 Set<T> eqClass = equivs.get(canonical);
@@ -289,6 +340,22 @@ public class Taxonomy<T> {
                 t = tCanonical;
             }
             Set<T> tSuccs = GraphUtils.successorSet(t, reduced);
+            System.err.println("really old succs:" + tSuccs.toString());
+            Set<T> closedSuccs = new HashSet<T>();
+            for (T succ : succs) {
+                closedSuccs.addAll(GraphUtils.successors(succ, closed));
+            }
+            for (T oldSucc : tSuccs) {
+                System.err.println("closed succs of " + oldSucc.toString() +
+                                   ": " + GraphUtils.successors(oldSucc, closed));
+                succs.removeAll(GraphUtils.successors(oldSucc, closed));
+                reduced_inverse.get(oldSucc).removeAll
+                    (GraphUtils.successors(t, closed_inverse));
+                if (!closedSuccs.contains(oldSucc)) {
+                    reduced_inverse.get(oldSucc).add(t);
+                }
+            }
+            System.err.println("old succs:" + tSuccs.toString());
             for (T succ : succs) {
                 tSuccs.removeAll(GraphUtils.successors(succ, closed));
                 tSuccs.add(succ);
@@ -296,7 +363,23 @@ public class Taxonomy<T> {
                 sPreds.removeAll(GraphUtils.successors(t, closed_inverse));
                 sPreds.add(t);
             }
+            System.err.println("new succs:" + tSuccs.toString());
+            
             Set<T> tPreds = GraphUtils.successorSet(t, reduced_inverse);
+            Set<T> closedPreds = new HashSet<T>();
+            for (T pred : preds) {
+                closedPreds.addAll(GraphUtils.successors(pred, closed_inverse));
+            }
+            for (T oldPred : tPreds) {
+                preds.removeAll(GraphUtils.successors(oldPred, closed_inverse));
+                reduced.get(oldPred).removeAll
+                    (GraphUtils.successors(t, closed));
+                if (!closedPreds.contains(oldPred)) {
+                    reduced.get(oldPred).add(t);
+                }
+            }
+            System.err.println("closed succs:" + GraphUtils.successors(t, closed).toString());
+            System.err.println("old preds:" + tPreds.toString());
             for (T pred : preds) {
                 tPreds.removeAll(GraphUtils.successors(pred, closed_inverse));
                 tPreds.add(pred);
@@ -304,6 +387,7 @@ public class Taxonomy<T> {
                 pSuccs.removeAll(GraphUtils.successors(t, closed));
                 pSuccs.add(t);
             }
+            System.err.println("new preds:" + tPreds.toString());
         }
     }
     
@@ -414,6 +498,73 @@ public class Taxonomy<T> {
                 }
                 predecessors.addAll(knownPredecessors);
             }
+        }
+    }
+    
+    // interface IntDist {
+    //     int get();
+    // }
+    // 
+    // static Map<Integer, Set<Integer>> randomPoset(int numNodes, IntDist numSuccs, IntDist numPreds) {
+    //     Set<Integer> roots = new HashSet<Integer>();
+    //     for (int i = 0; i < numNodes; ++i) {
+    //         Integer node = new Integer(i);
+    
+    
+    static Map<Integer, Set<Integer>> ladderGraph(int rungs) {
+        if (rungs < 1) rungs = 1;
+        GraphUtils.IntegerGraph igraph = new GraphUtils.IntegerGraph();
+        igraph.add(0, 1, 2);
+        for (int i = 1; i < rungs; ++i) {
+            igraph.add(i * 2 - 1, i * 2 + 1, i * 2 + 2);
+            igraph.add(i * 2, i * 2 + 1, i * 2 + 2);
+        }
+        igraph.add(rungs * 2 - 1, rungs * 2 + 1);
+        igraph.add(rungs * 2, rungs * 2 + 1);
+        igraph.add(rungs * 2 + 1);
+        for (int i = 0; i <= rungs * 2 + 1; ++i) {
+            igraph.add(i, i);
+        }
+        return igraph.graph;
+    }
+    
+    public static void main(String[] args) {
+        // GraphUtils.IntegerGraph igraph = new GraphUtils.IntegerGraph();
+        // igraph.add(0, 1, 2);
+        // igraph.add(1, 3, 4);
+        // igraph.add(2, 3, 4);
+        // igraph.add(3, 5, 6);
+        // igraph.add(4, 5, 6);
+        // igraph.add(5, 7);
+        // igraph.add(6, 7);
+        
+        final GraphUtils.TransAnalyzed<Integer> correct
+            = new GraphUtils.TransAnalyzed<Integer>(ladderGraph(2));
+        GraphUtils.removeSelfLoops(correct.reduced);
+        
+        Ordering<Integer> order = new Ordering<Integer>() {
+            public boolean doesPrecede(Integer x, Integer y) {
+                return GraphUtils.successors(x, correct.closed).contains(y);
+            }
+        };
+        
+        Map<Integer, Set<Integer>> known = GraphUtils.cloneGraph(correct.closed);
+        GraphUtils.removeEdges(known, 0.5);
+        Map<Integer, Set<Integer>> poss = GraphUtils.cloneGraph(correct.closed);
+        
+        Taxonomy<Integer> tax = new Taxonomy<Integer>(order, known, poss);
+        
+        GraphUtils.printGraph(correct.reduced);
+        System.err.println();
+        GraphUtils.printGraph(tax.reduced);
+        System.err.println();
+        GraphUtils.printGraph(correct.closed);
+        System.err.println();
+        GraphUtils.printGraph(tax.closed);
+        
+        if (!tax.reduced.equals(correct.reduced) ||
+            !tax.closed.equals(correct.closed)) {
+            System.err.println("FAILED!!!!");
         }
     }
 }
