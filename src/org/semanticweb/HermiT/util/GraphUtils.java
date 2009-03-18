@@ -1,4 +1,4 @@
-// Copyright 2008 by Oxford University; see license.txt for details
+// Copyright 2009 by Rob Shearer; see license.txt for details
 package org.semanticweb.HermiT.util;
 
 import java.util.Map;
@@ -144,7 +144,7 @@ public class GraphUtils {
      * 
      * Complexity: linear in the number of vertices of the graph
      */
-    public static <T> void prune(Map<T, Set<T>> graph) {
+    public static <T> void pruneEmpty(Map<T, Set<T>> graph) {
         Collection<T> toPrune = new ArrayList<T>();
         for (Map.Entry<T, Set<T>> e : graph.entrySet()) {
             if (e.getValue().isEmpty()) {
@@ -162,12 +162,17 @@ public class GraphUtils {
         }
     }
     
+    public static <T> void makeReflexive(Map<T, Set<T>> graph,
+                                         Set<T> domain) {
+        for (T t : domain) {
+            successorSet(t, graph).add(t);
+        }
+    }
+    
     /**
-     * Return a topological ordering of an acyclic graph; i.e. if `v` is a
-     * successor of `u` in `graph` then `u` will precede `v` in the returned
-     * list.
-     * 
-     * Note that this function requires `graph` to be acyclic.
+     * Return a topological ordering of an graph with no cycles other than
+     * self-loops; i.e. if `v` is a successor of `u` in `graph` then `u` will
+     * precede `v` in the returned list.
      * 
      * Complexity: O(|V| + |E|)
      */
@@ -175,7 +180,7 @@ public class GraphUtils {
         List<T> out = new ArrayList<T>();
         Map<T, Set<T>> incoming = reversed(graph);
         removeSelfLoops(incoming);
-        prune(incoming);
+        pruneEmpty(incoming);
         Set<T> noIncoming = new HashSet<T>(graph.keySet());
         noIncoming.removeAll(incoming.keySet());
         while (!noIncoming.isEmpty()) {
@@ -195,71 +200,12 @@ public class GraphUtils {
             }
         }
         if (!incoming.isEmpty()) {
-            throw new IllegalArgumentException("Unable to topologically sort a graph containing cycles.");
+            throw new IllegalArgumentException
+                ("Unable to topologically sort a graph containing cycles.");
         }
         return out;
     } // end topologicalSort
 
-    // /**
-    //  * A buggy algorithm to compute strongly connected components.
-    //  */
-    // public static <T> Set<Set<T>>
-    //     stronglyConnectedComponents(final Map<T, Set<T>> graph) {
-    //     final Set<Set<T>> out = new HashSet<Set<T>>();
-    //     final List<T> stack = new ArrayList<T>();
-    //     final Set<T> stackSet = new HashSet<T>();
-    //     final Map<T, Integer> indices = new HashMap<T, Integer>();
-    //     final Map<T, Integer> lows = new HashMap<T, Integer>();
-    //     class Tarjan {
-    //         int index = 0;
-    //         void tarjan(T t) {
-    //             Integer tIndex = new Integer(index++);
-    //             indices.put(t, tIndex);
-    //             Integer tLow = tIndex;
-    //             lows.put(t, tLow);
-    //             stack.add(t);
-    //             stackSet.add(t);
-    //             Set<T> successors = graph.get(t);
-    //             if (successors != null) {
-    //                 for (T succ : successors) {
-    //                     if (!indices.containsKey(succ)) {
-    //                         tarjan(succ);
-    //                         Integer succLow = lows.get(succ);
-    //                         assert succLow != null; // set by tarjan(succ)
-    //                         if (tLow < succLow) {
-    //                             lows.put(t, succLow);
-    //                             tLow = succLow;
-    //                         }
-    //                     } else if (stackSet.contains(succ)) {
-    //                         Integer succLow = lows.get(succ);
-    //                         assert succLow != null; // always set if on stack
-    //                         if (tLow < succLow) {
-    //                             lows.put(t, succLow);
-    //                             tLow = succLow;
-    //                         }
-    //                     }
-    //                 }
-    //             }
-    //             if (tLow.equals(tIndex)) {
-    //                 Set<T> scc = new HashSet<T>();
-    //                 T member;
-    //                 do {
-    //                     member = stack.remove(stack.size() - 1);
-    //                     stackSet.remove(member);
-    //                     scc.add(member);
-    //                 } while (member != t);
-    //                 out.add(scc);
-    //             }
-    //         } // end tarjan
-    //     } // end Tarjan class
-    //     Tarjan tar = new Tarjan();
-    //     for (T t : graph.keySet()) {
-    //         if (!indices.containsKey(t)) {
-    //             tar.tarjan(t);
-    //         }
-    //     }
-    //     return out;
-    // } // end stronglyConnectedComponents
 
     /**
      * Create an acyclic version of a graph by replacing every cycle with
@@ -323,12 +269,9 @@ public class GraphUtils {
         public Map<T, Set<T>> reduced = new HashMap<T, Set<T>>();
         public Map<T, Set<T>> closed = new HashMap<T, Set<T>>();
         public TransAnalyzed(Map<T, Set<T>> graph) {
-            // System.err.println("analyzing graph with " + String.valueOf(graph.size()) + " nodes");
             List<T> order = topologicalSort(graph);
-            // System.err.println("sorted " + String.valueOf(order.size()) + " elements");
             Comparator<T> cmp = new CompareByPosition<T>(order);
             Collections.reverse(order);
-            // System.err.println("ordered " + String.valueOf(order.size()) + " elements");
             for (T t : order) {
                 Set<T> reached = new HashSet<T>();
                 Set<T> tSucc = graph.get(t);
@@ -340,7 +283,7 @@ public class GraphUtils {
                     for (T succ : successors) {
                         if (!reached.contains(succ)) {
                             closedSucc.add(succ);
-                            if (!succ.equals(t)) {
+                            // if (!succ.equals(t)) {
                                 reducedSucc.add(succ);
                                 Set<T> reachable = closed.get(succ);
                                 if (reachable != null) {
@@ -351,7 +294,7 @@ public class GraphUtils {
                                         }
                                     }
                                 }
-                            }
+                            // }
                         }
                     } // end for succ
                 } // end if tSucc
@@ -450,90 +393,44 @@ public class GraphUtils {
         return true;
     }
     
-    public static <T> void printGraph(Map<T, Set<T>> graph) {
-        for (Map.Entry<T, Set<T>> e : graph.entrySet()) {
-            if (e.getValue().isEmpty()) {
-                System.out.print(e.getKey());
-                System.out.println(" no successors");
-            }
-            for (T t : e.getValue()) {
-                System.out.print(e.getKey());
-                System.out.print(" -> ");
-                System.out.println(t);
-            }
-        }
-    }
-    
-    // For convenient testing:
-    public static class IntegerGraph {
-        public Map<Integer, Set<Integer>> graph
-            = new TreeMap<Integer, Set<Integer>>();
-        public void add(int node, int... successors) {
-            Set<Integer> neighbors = graph.get(new Integer(node));
-            if (neighbors == null) {
-                neighbors = new TreeSet<Integer>();
-                graph.put(new Integer(node), neighbors);
-            }
-            for (int i : successors) neighbors.add(new Integer(i));
-        }
-    }
-    
-    public static <T> void removeEdges(Map<T, Set<T>> graph,
-                                       double fractionRemoved) {
-        for (Map.Entry<T, Set<T>> e : graph.entrySet()) {
-            for (Iterator<T> i = e.getValue().iterator(); i.hasNext(); ) {
-                i.next();
-                if (Math.random() < fractionRemoved) i.remove();
-            }
-        }
-    }
-    
-    public static <T> Map<T, Set<T>> cloneGraph(Map<T, Set<T>> original) {
-        Map<T, Set<T>> out = new HashMap<T, Set<T>>();
-        for (Map.Entry<T, Set<T>> e : original.entrySet()) {
-            out.put(e.getKey(), new HashSet<T>(e.getValue()));
-        }
-        return out;
-    }
-
-    public static void main(String[] args) {
-        class Relation {
-            public Map<Integer, Set<Integer>> map;
-            public Relation() {
-                map = new TreeMap<Integer, Set<Integer>>();
-            }
-            public void add(int node, int... successors) {
-                Set<Integer> neighbors = map.get(new Integer(node));
-                if (neighbors == null) {
-                    neighbors = new TreeSet<Integer>();
-                    map.put(new Integer(node), neighbors);
-                }
-                for (int i : successors) neighbors.add(new Integer(i));
-            }
-        }
-        Relation r = new Relation();
-        // r.add(0, 0);
-        // r.add(1, 1);
-        // r.add(2, 2);
-        r.add(0, 1);
-        // r.add(2, 1);
-        r.add(1, 2);
-        printGraph(r.map);
-        System.out.println("reversed:");
-        printGraph(reversed(r.map));
-        for (Set<Integer> comp : sccs(r.map)) {
-            System.out.println("component:");
-            for (Integer i : comp) {
-                System.out.println(i);
-            }
-        }
-        Acyclic<Integer> acyc = new Acyclic<Integer>(r.map, false);
-        System.out.println("acyclic:");
-        printGraph(acyc.graph);
-        List<Integer> sorted = topologicalSort(acyc.graph);
-        for (Integer i : sorted) {
-            System.out.println(i);
-        }
-    }
+    // public static void main(String[] args) {
+    //     class Relation {
+    //         public Map<Integer, Set<Integer>> map;
+    //         public Relation() {
+    //             map = new TreeMap<Integer, Set<Integer>>();
+    //         }
+    //         public void add(int node, int... successors) {
+    //             Set<Integer> neighbors = map.get(new Integer(node));
+    //             if (neighbors == null) {
+    //                 neighbors = new TreeSet<Integer>();
+    //                 map.put(new Integer(node), neighbors);
+    //             }
+    //             for (int i : successors) neighbors.add(new Integer(i));
+    //         }
+    //     }
+    //     Relation r = new Relation();
+    //     // r.add(0, 0);
+    //     // r.add(1, 1);
+    //     // r.add(2, 2);
+    //     r.add(0, 1);
+    //     // r.add(2, 1);
+    //     r.add(1, 2);
+    //     printGraph(r.map);
+    //     System.out.println("reversed:");
+    //     printGraph(reversed(r.map));
+    //     for (Set<Integer> comp : sccs(r.map)) {
+    //         System.out.println("component:");
+    //         for (Integer i : comp) {
+    //             System.out.println(i);
+    //         }
+    //     }
+    //     Acyclic<Integer> acyc = new Acyclic<Integer>(r.map, false);
+    //     System.out.println("acyclic:");
+    //     printGraph(acyc.graph);
+    //     List<Integer> sorted = topologicalSort(acyc.graph);
+    //     for (Integer i : sorted) {
+    //         System.out.println(i);
+    //     }
+    // }
 
 }

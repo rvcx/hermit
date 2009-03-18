@@ -1,4 +1,4 @@
-// Copyright 2008 by Oxford University; see license.txt for details
+// Copyright 2009 by Rob Shearer; see license.txt for details
 package org.semanticweb.HermiT.hierarchy;
 
 import java.util.Map;
@@ -10,6 +10,9 @@ import java.util.Iterator;
 import org.semanticweb.HermiT.util.GraphUtils;
 import org.semanticweb.HermiT.util.InducedSubgraph;
 import org.semanticweb.HermiT.util.DifferenceSet;
+
+import org.semanticweb.HermiT.util.GraphTesting;
+
 
 public class Taxonomy<T> {
     public Map<T, T> canonical;
@@ -141,7 +144,7 @@ public class Taxonomy<T> {
                                           final Map<T, Set<T>> graph,
                                           Map<T, Set<T>> inverse) {
         System.err.println("Searching graph:");
-        GraphUtils.printGraph(graph);
+        GraphTesting.printGraph(graph, System.err);
         Predicate<T> cachedPredicate = new Predicate<T>() {
             Map<T, Boolean> cache = new HashMap<T, Boolean>();
             boolean compute(T v) {
@@ -256,7 +259,7 @@ public class Taxonomy<T> {
         closed = analyzed.closed;
         closed_inverse = GraphUtils.reversed(closed);
         System.err.println("Initial closed:");
-        GraphUtils.printGraph(closed);
+        GraphTesting.printGraph(closed, System.err);
         
         Map<T, Set<T>> poss = possibleSuccessors;
         Map<T, Set<T>> poss_inv = GraphUtils.reversed(poss);
@@ -297,9 +300,9 @@ public class Taxonomy<T> {
 
         for (T t : equivs.keySet()) { // might want to sort this...
             System.err.println("classifying " + t.toString());
-            GraphUtils.printGraph(reduced);
+            GraphTesting.printGraph(reduced, System.err);
             System.err.println("possible:");
-            GraphUtils.printGraph(poss);
+            GraphTesting.printGraph(poss, System.err);
             final T finalT = t;
             Set<T> succs = newSuccessors
                 (t,
@@ -501,70 +504,44 @@ public class Taxonomy<T> {
         }
     }
     
-    // interface IntDist {
-    //     int get();
+    
+    // public static void main(String[] args) {
+    //     // GraphUtils.IntegerGraph igraph = new GraphUtils.IntegerGraph();
+    //     // igraph.add(0, 1, 2);
+    //     // igraph.add(1, 3, 4);
+    //     // igraph.add(2, 3, 4);
+    //     // igraph.add(3, 5, 6);
+    //     // igraph.add(4, 5, 6);
+    //     // igraph.add(5, 7);
+    //     // igraph.add(6, 7);
+    //     
+    //     final GraphUtils.TransAnalyzed<Integer> correct
+    //         = new GraphUtils.TransAnalyzed<Integer>(ladderGraph(2));
+    //     GraphUtils.removeSelfLoops(correct.reduced);
+    //     
+    //     Ordering<Integer> order = new Ordering<Integer>() {
+    //         public boolean doesPrecede(Integer x, Integer y) {
+    //             return GraphUtils.successors(x, correct.closed).contains(y);
+    //         }
+    //     };
+    //     
+    //     Map<Integer, Set<Integer>> known = GraphUtils.cloneGraph(correct.closed);
+    //     GraphUtils.removeEdges(known, 0.5);
+    //     Map<Integer, Set<Integer>> poss = GraphUtils.cloneGraph(correct.closed);
+    //     
+    //     Taxonomy<Integer> tax = new Taxonomy<Integer>(order, known, poss);
+    //     
+    //     GraphTesting.printGraph(correct.reduced);
+    //     System.err.println();
+    //     GraphTesting.printGraph(tax.reduced);
+    //     System.err.println();
+    //     GraphTesting.printGraph(correct.closed);
+    //     System.err.println();
+    //     GraphTesting.printGraph(tax.closed);
+    //     
+    //     if (!tax.reduced.equals(correct.reduced) ||
+    //         !tax.closed.equals(correct.closed)) {
+    //         System.err.println("FAILED!!!!");
+    //     }
     // }
-    // 
-    // static Map<Integer, Set<Integer>> randomPoset(int numNodes, IntDist numSuccs, IntDist numPreds) {
-    //     Set<Integer> roots = new HashSet<Integer>();
-    //     for (int i = 0; i < numNodes; ++i) {
-    //         Integer node = new Integer(i);
-    
-    
-    static Map<Integer, Set<Integer>> ladderGraph(int rungs) {
-        if (rungs < 1) rungs = 1;
-        GraphUtils.IntegerGraph igraph = new GraphUtils.IntegerGraph();
-        igraph.add(0, 1, 2);
-        for (int i = 1; i < rungs; ++i) {
-            igraph.add(i * 2 - 1, i * 2 + 1, i * 2 + 2);
-            igraph.add(i * 2, i * 2 + 1, i * 2 + 2);
-        }
-        igraph.add(rungs * 2 - 1, rungs * 2 + 1);
-        igraph.add(rungs * 2, rungs * 2 + 1);
-        igraph.add(rungs * 2 + 1);
-        for (int i = 0; i <= rungs * 2 + 1; ++i) {
-            igraph.add(i, i);
-        }
-        return igraph.graph;
-    }
-    
-    public static void main(String[] args) {
-        // GraphUtils.IntegerGraph igraph = new GraphUtils.IntegerGraph();
-        // igraph.add(0, 1, 2);
-        // igraph.add(1, 3, 4);
-        // igraph.add(2, 3, 4);
-        // igraph.add(3, 5, 6);
-        // igraph.add(4, 5, 6);
-        // igraph.add(5, 7);
-        // igraph.add(6, 7);
-        
-        final GraphUtils.TransAnalyzed<Integer> correct
-            = new GraphUtils.TransAnalyzed<Integer>(ladderGraph(2));
-        GraphUtils.removeSelfLoops(correct.reduced);
-        
-        Ordering<Integer> order = new Ordering<Integer>() {
-            public boolean doesPrecede(Integer x, Integer y) {
-                return GraphUtils.successors(x, correct.closed).contains(y);
-            }
-        };
-        
-        Map<Integer, Set<Integer>> known = GraphUtils.cloneGraph(correct.closed);
-        GraphUtils.removeEdges(known, 0.5);
-        Map<Integer, Set<Integer>> poss = GraphUtils.cloneGraph(correct.closed);
-        
-        Taxonomy<Integer> tax = new Taxonomy<Integer>(order, known, poss);
-        
-        GraphUtils.printGraph(correct.reduced);
-        System.err.println();
-        GraphUtils.printGraph(tax.reduced);
-        System.err.println();
-        GraphUtils.printGraph(correct.closed);
-        System.err.println();
-        GraphUtils.printGraph(tax.closed);
-        
-        if (!tax.reduced.equals(correct.reduced) ||
-            !tax.closed.equals(correct.closed)) {
-            System.err.println("FAILED!!!!");
-        }
-    }
 }
