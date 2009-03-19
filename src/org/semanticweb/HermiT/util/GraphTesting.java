@@ -41,10 +41,10 @@ public class GraphTesting {
     
     public static <T> void addEdges(Map<T, Set<T>> graph,
                                     Collection<T> domain,
-                                    int numToAdd,
+                                    double fractionToAdd,
                                     java.util.Random rand) {
         ArrayList<T> choices = new ArrayList<T>(domain);
-        for (int i = 0; i < numToAdd; ++i) {
+        for (int i = 0; i < fractionToAdd * domain.size() * domain.size(); ++i) {
             GraphUtils.successorSet(choices.get(rand.nextInt(choices.size())), graph)
                 .add(choices.get(rand.nextInt(choices.size())));
         }

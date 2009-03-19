@@ -205,7 +205,18 @@ public class GraphUtils {
         }
         return out;
     } // end topologicalSort
-
+    
+    /**
+     * Return a linearization of a graph which is not necessarily acyclic.
+     */
+    public static <T> List<T> weakTopologicalSort(Map<T, Set<T>> graph) {
+        Acyclic<T> acyc = new Acyclic<T>(graph, false);
+        List<T> out = new ArrayList<T>();
+        for (T canonical : topologicalSort(acyc.graph)) {
+            out.addAll(acyc.equivs.get(canonical));
+        }
+        return out;
+    }
 
     /**
      * Create an acyclic version of a graph by replacing every cycle with
@@ -345,6 +356,8 @@ public class GraphUtils {
     /**
      * Return the strongly-connected components of a graph.
      * The algorithm is from Cormen, Leiserson, and Rivest.
+     * 
+     * Complexity: O(|V| + |E|)
      */
     static <T> Set<Set<T>> sccs(Map<T, Set<T>> graph) {
         final Map<T, Integer> positions

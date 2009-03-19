@@ -5,6 +5,8 @@ import java.util.Map;
 import java.util.HashMap;
 import java.util.Set;
 import java.util.HashSet;
+import java.util.List;
+import java.util.Collections;
 import java.util.ArrayList;
 import java.util.Iterator;
 import org.semanticweb.HermiT.util.GraphUtils;
@@ -39,8 +41,7 @@ public class Taxonomy<T> {
                 if (canonicalSuccs != null) {
                     canonicalSuccs.retainAll(oldnameSuccs);
                 } else {
-                    possibleSuccessors.put
-                        (e.getValue(), new HashSet<T>(oldnameSuccs));
+                    possibleSuccessors.put(e.getValue(), oldnameSuccs);
                 }
             }
         }
@@ -72,21 +73,23 @@ public class Taxonomy<T> {
     
     /**
      * Prune possible information based on the knowledge that all successors
-     * of `t` are listed in `this.closed`.
+     * of `t` are listed in `known`.
      * 
      * A relation `u -> v` is possible only if for every ancestor `u1` of
      * `u` and every descendant `v1` of `v`, the relation `u1 -> v1` is
      * possible.
      */
-    private void prunePossibles(T t,
-                                Map<T, Set<T>> poss,
-                                Map<T, Set<T>> poss_inv) {
+    private static <T> void prunePossibles(T t,
+                                           Map<T, Set<T>> known,
+                                           Map<T, Set<T>> known_inverse,
+                                           Map<T, Set<T>> poss,
+                                           Map<T, Set<T>> poss_inv) {
         // Consider the information gained from each previous possible
         // successor of `t`:
         Set<T> oldPoss = poss.get(t);
-        poss.put(t, new HashSet<T>(GraphUtils.successors(t, closed)));
+        poss.put(t, new HashSet<T>(GraphUtils.successors(t, known)));
         for (T p : oldPoss) {
-            if (GraphUtils.successors(t, closed).contains(p)) {
+            if (GraphUtils.successors(t, known).contains(p)) {
                 // The old possible became a known:
                 { // Cases where the new edge serves as `u1 -> u`:
                     final T u1 = t, u = p;
@@ -94,7 +97,7 @@ public class Taxonomy<T> {
                          uv.hasNext(); ) {
                         T v = uv.next();
                         if (!poss.get(u1).containsAll
-                                (GraphUtils.successors(v, closed))) {
+                                (GraphUtils.successors(v, known))) {
                             uv.remove();
                             poss_inv.get(v).remove(u);
                         }
@@ -106,7 +109,7 @@ public class Taxonomy<T> {
                          vu.hasNext(); ) {
                         T u = vu.next();
                         if (!poss_inv.get(v1).containsAll
-                                (GraphUtils.successors(u, closed_inverse))) {
+                                (GraphUtils.successors(u, known_inverse))) {
                             vu.remove();
                             poss.get(u).remove(v);
                         }
@@ -114,11 +117,11 @@ public class Taxonomy<T> {
                 }
             } else { // An edge is no longer considered possible:
                 final T u1 = t, v1 = p;
-                for (T u : GraphUtils.successors(u1, closed)) {
+                for (T u : GraphUtils.successors(u1, known)) {
                     for (Iterator<T> uv = poss.get(u).iterator();
                          uv.hasNext(); ) {
                         T v = uv.next();
-                        if (GraphUtils.successors(v, closed).contains(v1)) {
+                        if (GraphUtils.successors(v, known).contains(v1)) {
                             uv.remove();
                             poss_inv.get(v).remove(u);
                         }
@@ -143,8 +146,8 @@ public class Taxonomy<T> {
     private static <T> Set<T> mostGeneral(final Predicate<T> predicate,
                                           final Map<T, Set<T>> graph,
                                           Map<T, Set<T>> inverse) {
-        System.err.println("Searching graph:");
-        GraphTesting.printGraph(graph, System.err);
+        // System.err.println("Searching graph:");
+        // GraphTesting.printGraph(graph, System.err);
         Predicate<T> cachedPredicate = new Predicate<T>() {
             Map<T, Boolean> cache = new HashMap<T, Boolean>();
             boolean compute(T v) {
@@ -175,6 +178,7 @@ public class Taxonomy<T> {
                 visited.add(t);
             }
         }
+        // TODO: see whether a FIFO queue works better in practice:
         Set<T> q = new HashSet<T>(visited);
         Set<T> out = new HashSet<T>();
         while (!q.isEmpty()) {
@@ -196,17 +200,17 @@ public class Taxonomy<T> {
         return out;
     }
 
-    private Set<T> newSuccessors(final T t,
-                                 final Predicate<T> succTest,
-                                 Map<T, Set<T>> possible) {
-        Set<T> toConsider = new HashSet<T>(possible.get(t));
-        toConsider.removeAll(GraphUtils.successors(t, closed));
-        return mostGeneral(
-            succTest,
-            new InducedSubgraph<T>(reduced, toConsider),
-            new InducedSubgraph<T>(reduced_inverse, toConsider));
-    }
-    
+    // private Set<T> newSuccessors(final T t,
+    //                              final Predicate<T> succTest,
+    //                              Map<T, Set<T>> possible) {
+    //     Set<T> toConsider = new HashSet<T>(possible.get(t));
+    //     toConsider.removeAll(GraphUtils.successors(t, closed));
+    //     return mostGeneral(
+    //         succTest,
+    //         new InducedSubgraph<T>(reduced, toConsider),
+    //         new InducedSubgraph<T>(reduced_inverse, toConsider));
+    // }
+    // 
     private void updateClosure(T t, Set<T> newSuccessors) {
         // Update closure (which serves as "known" information):
         Set<T> closedSuccs = GraphUtils.successorSet(t, closed);
@@ -234,14 +238,14 @@ public class Taxonomy<T> {
     }
 
     public Taxonomy(final Ordering<? super T> order,
+                    Set<T> domain,
                     Map<T, Set<T>> knownSuccessors, // can't be null
                     Map<T, Set<T>> possibleSuccessors) {
-        assert knownSuccessors != null;
-        if (possibleSuccessors == null) {
-            possibleSuccessors = new HashMap<T, Set<T>>();
+        // Sanitize knownSuccessors and init taxonomy from known info:
+        if (knownSuccessors == null) {
+            knownSuccessors = new HashMap<T, Set<T>>();
         }
-        
-        for (T t : knownSuccessors.keySet()) {
+        for (T t : domain) {
             GraphUtils.successorSet(t, knownSuccessors).add(t);
         }
         
@@ -252,81 +256,80 @@ public class Taxonomy<T> {
         GraphUtils.TransAnalyzed<T> analyzed
             = new GraphUtils.TransAnalyzed<T>(acyc.graph);
         reduced = analyzed.reduced;
-        for (T t : knownSuccessors.keySet()) {
-            GraphUtils.successorSet(t, reduced);
-        }
+        GraphUtils.removeSelfLoops(reduced);
         reduced_inverse = GraphUtils.reversed(reduced);
+        for (T t : domain) {
+            GraphUtils.successorSet(t, reduced);
+            GraphUtils.successorSet(t, reduced_inverse);
+        }
         closed = analyzed.closed;
         closed_inverse = GraphUtils.reversed(closed);
-        System.err.println("Initial closed:");
-        GraphTesting.printGraph(closed, System.err);
+
+        // System.err.println("Initial closed:");
+        // GraphTesting.printGraph(closed, System.err);
         
-        Map<T, Set<T>> poss = possibleSuccessors;
-        Map<T, Set<T>> poss_inv = GraphUtils.reversed(poss);
-
-        {
-            Set<T> allTs = knownSuccessors.keySet();
-            Set<T> anySuccs = new HashSet<T>();
-            for (T t : allTs) {
-                Set<T> succs = possibleSuccessors.get(t);
-                if (succs == null) {
-                    anySuccs.add(t);
-                    possibleSuccessors.put(t, new DifferenceSet<T>(allTs));
-                }
-            }
-            assert GraphUtils.isSubgraphOf(knownSuccessors, possibleSuccessors);
-
-            for (T t : allTs) {
-                Set<T> preds = poss_inv.get(t);
-                if (anySuccs.size() > allTs.size()/2) {
-                    Set<T> newPreds = new DifferenceSet<T>(anySuccs);
-                    if (preds != null) {
-                        newPreds.addAll(preds);
-                    }
-                    poss_inv.put(t, newPreds);
-                } else {
-                    if (preds == null) {
-                        preds = new HashSet<T>();
-                        poss_inv.put(t, preds);
-                    }
-                    preds.addAll(anySuccs);
-                }
+        // Sanitize possibleSuccessors and prune based on known info:
+        if (possibleSuccessors == null) {
+            possibleSuccessors = new HashMap<T, Set<T>>();
+        }
+        for (T t : domain) {
+            Set<T> s = possibleSuccessors.get(t);
+            if (s == null) {
+                possibleSuccessors.put(t, new HashSet<T>(domain));
             }
         }
+        prunePossibles(possibleSuccessors);
+        Map<T, Set<T>> poss = possibleSuccessors;
+        Map<T, Set<T>> poss_inv = GraphUtils.reversed(poss);
+        for (T t : domain) {
+            GraphUtils.successorSet(t, poss_inv);
+        }
 
-        prunePossibles(poss);
+        // Classify each concept:
         Taxonomy<T> tax_inv = new Taxonomy<T>(this);
-        tax_inv.prunePossibles(poss_inv);
-
-        for (T t : equivs.keySet()) { // might want to sort this...
+        List<T> definitionOrder = GraphUtils.weakTopologicalSort(poss);
+        Collections.reverse(definitionOrder);
+        for (T t : definitionOrder) {
+            if (poss.get(t).equals(closed.get(t)) &&
+                poss_inv.get(t).equals(closed_inverse.get(t))) continue;
+            
             System.err.println("classifying " + t.toString());
-            GraphTesting.printGraph(reduced, System.err);
-            System.err.println("possible:");
-            GraphTesting.printGraph(poss, System.err);
+            // GraphTesting.printGraph(reduced, System.err);
+            // System.err.println("possible:");
+            // GraphTesting.printGraph(poss, System.err);
+
             final T finalT = t;
-            Set<T> succs = newSuccessors
-                (t,
-                 new Predicate<T>() {
+            Set<T> toConsider = new HashSet<T>(poss.get(t));
+            toConsider.removeAll(GraphUtils.successors(t, closed));
+            Set<T> succs = mostGeneral
+                (new Predicate<T>() {
                      public boolean trueOf(T u) {
                          return !u.equals(finalT) && order.doesPrecede(finalT, u);
                      }
                  },
-                 poss);
+                 new InducedSubgraph<T>(reduced, toConsider),
+                 new InducedSubgraph<T>(reduced_inverse, toConsider));
+
             System.err.println("found successors: " + succs.toString());
+
             updateClosure(t, succs);
-            prunePossibles(t, poss, poss_inv);
+            prunePossibles(t, poss, poss_inv, closed, closed_inverse);
             
-            Set<T> preds = tax_inv.newSuccessors
-                (t,
-                 new Predicate<T>() {
+            toConsider = new HashSet<T>(poss_inv.get(t));
+            toConsider.removeAll(GraphUtils.successors(t, closed_inverse));
+            Set<T> preds = mostGeneral
+                (new Predicate<T>() {
                      public boolean trueOf(T u) {
                          return !u.equals(finalT) && order.doesPrecede(u, finalT);
                      }
                  },
-                 poss_inv);
+                 new InducedSubgraph<T>(reduced_inverse, toConsider),
+                 new InducedSubgraph<T>(reduced, toConsider));
+
             System.err.println("found predecessors: " + preds.toString());
+
             tax_inv.updateClosure(t, preds);
-            tax_inv.prunePossibles(t, poss_inv, poss);
+            prunePossibles(t, poss_inv, poss, closed_inverse, closed);
             
             // Update reduced:
             if (!succs.isEmpty() && succs.equals(preds)) {
@@ -342,55 +345,48 @@ public class Taxonomy<T> {
                 preds = GraphUtils.successors(t, reduced_inverse);
                 t = tCanonical;
             }
-            Set<T> tSuccs = GraphUtils.successorSet(t, reduced);
-            System.err.println("really old succs:" + tSuccs.toString());
-            Set<T> closedSuccs = new HashSet<T>();
+            // Remove old successors that are no longer direct:
+            Set<T> defunctSuccs = new HashSet<T>();
             for (T succ : succs) {
-                closedSuccs.addAll(GraphUtils.successors(succ, closed));
+                defunctSuccs.addAll(GraphUtils.successors(succ, closed));
             }
-            for (T oldSucc : tSuccs) {
-                System.err.println("closed succs of " + oldSucc.toString() +
-                                   ": " + GraphUtils.successors(oldSucc, closed));
-                succs.removeAll(GraphUtils.successors(oldSucc, closed));
-                reduced_inverse.get(oldSucc).removeAll
-                    (GraphUtils.successors(t, closed_inverse));
-                if (!closedSuccs.contains(oldSucc)) {
-                    reduced_inverse.get(oldSucc).add(t);
-                }
+            defunctSuccs.retainAll(GraphUtils.successors(t, reduced));
+            for (T oldSucc : defunctSuccs) {
+                reduced.get(t).remove(oldSucc);
+                reduced_inverse.get(oldSucc).remove(t);
             }
-            System.err.println("old succs:" + tSuccs.toString());
+            // Add new successors:
+            Set<T> redSuccs = GraphUtils.successorSet(t, reduced);
             for (T succ : succs) {
-                tSuccs.removeAll(GraphUtils.successors(succ, closed));
-                tSuccs.add(succ);
+                redSuccs.add(succ);
                 Set<T> sPreds = GraphUtils.successorSet(succ, reduced_inverse);
                 sPreds.removeAll(GraphUtils.successors(t, closed_inverse));
                 sPreds.add(t);
             }
-            System.err.println("new succs:" + tSuccs.toString());
+            // System.err.println("new succs:" + tSuccs.toString());
             
-            Set<T> tPreds = GraphUtils.successorSet(t, reduced_inverse);
-            Set<T> closedPreds = new HashSet<T>();
+            // Remove old predecessors:
+            Set<T> defunctPreds = new HashSet<T>();
             for (T pred : preds) {
-                closedPreds.addAll(GraphUtils.successors(pred, closed_inverse));
+                defunctPreds.addAll(GraphUtils.successors(pred, closed_inverse));
             }
-            for (T oldPred : tPreds) {
-                preds.removeAll(GraphUtils.successors(oldPred, closed_inverse));
-                reduced.get(oldPred).removeAll
-                    (GraphUtils.successors(t, closed));
-                if (!closedPreds.contains(oldPred)) {
-                    reduced.get(oldPred).add(t);
-                }
+            defunctPreds.retainAll(GraphUtils.successors(t, reduced_inverse));
+            for (T oldPred : defunctPreds) {
+                reduced_inverse.get(t).remove(oldPred);
+                reduced.get(oldPred).remove(t);
             }
-            System.err.println("closed succs:" + GraphUtils.successors(t, closed).toString());
-            System.err.println("old preds:" + tPreds.toString());
+            // Add new predecessors:
+            Set<T> redPreds = GraphUtils.successorSet(t, reduced_inverse);
             for (T pred : preds) {
-                tPreds.removeAll(GraphUtils.successors(pred, closed_inverse));
-                tPreds.add(pred);
+                redPreds.add(pred);
                 Set<T> pSuccs = GraphUtils.successorSet(pred, reduced);
                 pSuccs.removeAll(GraphUtils.successors(t, closed));
                 pSuccs.add(t);
             }
-            System.err.println("new preds:" + tPreds.toString());
+            // System.err.println("new preds:" + tPreds.toString());
+            
+            System.err.println("Done; reduced now:");
+            GraphTesting.printGraph(reduced, System.err);
         }
     }
     
@@ -505,43 +501,38 @@ public class Taxonomy<T> {
     }
     
     
-    // public static void main(String[] args) {
-    //     // GraphUtils.IntegerGraph igraph = new GraphUtils.IntegerGraph();
-    //     // igraph.add(0, 1, 2);
-    //     // igraph.add(1, 3, 4);
-    //     // igraph.add(2, 3, 4);
-    //     // igraph.add(3, 5, 6);
-    //     // igraph.add(4, 5, 6);
-    //     // igraph.add(5, 7);
-    //     // igraph.add(6, 7);
-    //     
-    //     final GraphUtils.TransAnalyzed<Integer> correct
-    //         = new GraphUtils.TransAnalyzed<Integer>(ladderGraph(2));
-    //     GraphUtils.removeSelfLoops(correct.reduced);
-    //     
-    //     Ordering<Integer> order = new Ordering<Integer>() {
-    //         public boolean doesPrecede(Integer x, Integer y) {
-    //             return GraphUtils.successors(x, correct.closed).contains(y);
-    //         }
-    //     };
-    //     
-    //     Map<Integer, Set<Integer>> known = GraphUtils.cloneGraph(correct.closed);
-    //     GraphUtils.removeEdges(known, 0.5);
-    //     Map<Integer, Set<Integer>> poss = GraphUtils.cloneGraph(correct.closed);
-    //     
-    //     Taxonomy<Integer> tax = new Taxonomy<Integer>(order, known, poss);
-    //     
-    //     GraphTesting.printGraph(correct.reduced);
-    //     System.err.println();
-    //     GraphTesting.printGraph(tax.reduced);
-    //     System.err.println();
-    //     GraphTesting.printGraph(correct.closed);
-    //     System.err.println();
-    //     GraphTesting.printGraph(tax.closed);
-    //     
-    //     if (!tax.reduced.equals(correct.reduced) ||
-    //         !tax.closed.equals(correct.closed)) {
-    //         System.err.println("FAILED!!!!");
-    //     }
-    // }
+    public static void main(String[] args) {
+        
+        GraphTesting.LadderGraph ladder = new GraphTesting.LadderGraph(2);
+        
+        java.util.Random rand = new java.util.Random(0);
+
+        final GraphUtils.TransAnalyzed<Integer> correct
+            = new GraphUtils.TransAnalyzed<Integer>(ladder.graph);
+        GraphUtils.removeSelfLoops(correct.reduced);
+        
+        Ordering<Integer> order = new Ordering<Integer>() {
+            public boolean doesPrecede(Integer x, Integer y) {
+                return GraphUtils.successors(x, correct.closed).contains(y);
+            }
+        };
+        
+        Map<Integer, Set<Integer>> known = GraphTesting.cloneGraph(correct.closed);
+        GraphTesting.removeEdges(known, 0.5, rand);
+        Map<Integer, Set<Integer>> poss = GraphTesting.cloneGraph(correct.closed);
+        GraphTesting.addEdges(poss, ladder.domain, 0.5, rand);
+        
+        Taxonomy<Integer> tax = new Taxonomy<Integer>(order, ladder.domain,
+                                                      known, poss);
+        
+        if (!tax.reduced.equals(correct.reduced)) {
+            System.out.println("Correct taxonomy:");
+            GraphTesting.printGraph(correct.reduced, System.out);
+            System.out.println("Computed taxonomy:");
+            GraphTesting.printGraph(tax.reduced, System.out);
+        } else {
+            System.out.println("Woo-hoo!");
+        }
+        
+    }
 }
