@@ -217,6 +217,38 @@ public class Taxonomy<T> {
         }
     }
     
+    private static <T> void extendReduced(T t, Set<T> newSuccessors,
+                                          Map<T, Set<T>> reduced,
+                                          Map<T, Set<T>> reduced_inverse,
+                                          Map<T, Set<T>> closed,
+                                          Map<T, Set<T>> closed_inverse) {
+        // Remove old successors that are no longer direct:
+        Set<T> defunctSuccs = new HashSet<T>();
+        for (T succ : newSuccessors) {
+            defunctSuccs.addAll(GraphUtils.successors(succ, closed));
+        }
+        defunctSuccs.retainAll(GraphUtils.successors(t, reduced));
+        for (T oldSucc : defunctSuccs) {
+            reduced.get(t).remove(oldSucc);
+            reduced_inverse.get(oldSucc).remove(t);
+        }
+        // Add new successors:
+        Set<T> redSuccs = GraphUtils.successorSet(t, reduced);
+        Set<T> tPreds = GraphUtils.successors(t, closed_inverse);
+        for (T succ : newSuccessors) {
+            redSuccs.add(succ);
+            Set<T> sPreds = GraphUtils.successorSet(succ, reduced_inverse);
+            for (Iterator<T> i = sPreds.iterator(); i.hasNext(); ) {
+                T sPred = i.next();
+                if (tPreds.contains(sPred)) {
+                    reduced.get(sPred).remove(succ);
+                    i.remove();
+                }
+            }
+            sPreds.add(t);
+        }
+    }
+    
     public interface Ordering<U> {
         boolean doesPrecede(U predecessor, U successor);
     }
@@ -270,16 +302,18 @@ public class Taxonomy<T> {
         List<T> definitionOrder = GraphUtils.weakTopologicalSort(poss);
         Collections.reverse(definitionOrder);
         for (T t : definitionOrder) {
+            // Skip an element if we already know everything about it:
             if (poss.get(t).equals(closed.get(t)) &&
                 poss_inv.get(t).equals(closed_inverse.get(t))) continue;
             
+            // Identify position in unknown portion of graph:
             final T finalT = t;
             Set<T> toConsider = new HashSet<T>(poss.get(t));
             toConsider.removeAll(GraphUtils.successors(t, closed));
             Set<T> succs = mostGeneral
                 (new Predicate<T>() {
                      public boolean trueOf(T u) {
-                         return !u.equals(finalT) && order.doesPrecede(finalT, u);
+                         return order.doesPrecede(finalT, u);
                      }
                  },
                  new InducedSubgraph<T>(reduced, toConsider),
@@ -293,12 +327,11 @@ public class Taxonomy<T> {
             Set<T> preds = mostGeneral
                 (new Predicate<T>() {
                      public boolean trueOf(T u) {
-                         return !u.equals(finalT) && order.doesPrecede(u, finalT);
+                         return order.doesPrecede(u, finalT);
                      }
                  },
                  new InducedSubgraph<T>(reduced_inverse, toConsider),
                  new InducedSubgraph<T>(reduced, toConsider));
-
 
             extendClosure(t, preds, closed_inverse, closed);
             prunePossibles(t, poss_inv, poss, closed_inverse, closed);
@@ -317,57 +350,11 @@ public class Taxonomy<T> {
                 preds = GraphUtils.successors(t, reduced_inverse);
                 t = tCanonical;
             }
-            // Remove old successors that are no longer direct:
-            Set<T> defunctSuccs = new HashSet<T>();
-            for (T succ : succs) {
-                defunctSuccs.addAll(GraphUtils.successors(succ, closed));
-            }
-            defunctSuccs.retainAll(GraphUtils.successors(t, reduced));
-            for (T oldSucc : defunctSuccs) {
-                reduced.get(t).remove(oldSucc);
-                reduced_inverse.get(oldSucc).remove(t);
-            }
-            // Add new successors:
-            Set<T> redSuccs = GraphUtils.successorSet(t, reduced);
-            Set<T> tPreds = GraphUtils.successors(t, closed_inverse);
-            for (T succ : succs) {
-                redSuccs.add(succ);
-                Set<T> sPreds = GraphUtils.successorSet(succ, reduced_inverse);
-                for (Iterator<T> i = sPreds.iterator(); i.hasNext(); ) {
-                    T sPred = i.next();
-                    if (tPreds.contains(sPred)) {
-                        reduced.get(sPred).remove(succ);
-                        i.remove();
-                    }
-                }
-                sPreds.add(t);
-            }
             
-            // Remove old predecessors:
-            Set<T> defunctPreds = new HashSet<T>();
-            for (T pred : preds) {
-                defunctPreds.addAll(GraphUtils.successors(pred, closed_inverse));
-            }
-            defunctPreds.retainAll(GraphUtils.successors(t, reduced_inverse));
-            for (T oldPred : defunctPreds) {
-                reduced_inverse.get(t).remove(oldPred);
-                reduced.get(oldPred).remove(t);
-            }
-            // Add new predecessors:
-            Set<T> redPreds = GraphUtils.successorSet(t, reduced_inverse);
-            Set<T> tSuccs = GraphUtils.successors(t, closed);
-            for (T pred : preds) {
-                redPreds.add(pred);
-                Set<T> pSuccs = GraphUtils.successorSet(pred, reduced);
-                for (Iterator<T> i = pSuccs.iterator(); i.hasNext(); ) {
-                    T pSucc = i.next();
-                    if (tSuccs.contains(pSucc)) {
-                        reduced_inverse.get(pSucc).remove(pred);
-                        i.remove();
-                    }
-                }
-                pSuccs.add(t);
-            }
+            extendReduced(t, succs,
+                          reduced, reduced_inverse, closed, closed_inverse);
+            extendReduced(t, preds,
+                          reduced_inverse, reduced, closed_inverse, closed);
         }
     }
     
