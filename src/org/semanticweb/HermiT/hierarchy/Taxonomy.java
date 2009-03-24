@@ -198,20 +198,11 @@ public class Taxonomy<T> {
         return out;
     }
 
-    // private Set<T> newSuccessors(final T t,
-    //                              final Predicate<T> succTest,
-    //                              Map<T, Set<T>> possible) {
-    //     Set<T> toConsider = new HashSet<T>(possible.get(t));
-    //     toConsider.removeAll(GraphUtils.successors(t, closed));
-    //     return mostGeneral(
-    //         succTest,
-    //         new InducedSubgraph<T>(reduced, toConsider),
-    //         new InducedSubgraph<T>(reduced_inverse, toConsider));
-    // }
-    // 
-    private void updateClosure(T t, Set<T> newSuccessors) {
-        // Update closure (which serves as "known" information):
+    private static <T> void extendClosure(T t, Set<T> newSuccessors,
+                                          Map<T, Set<T>> closed,
+                                          Map<T, Set<T>> closed_inverse) {
         Set<T> closedSuccs = GraphUtils.successorSet(t, closed);
+        if (closedSuccs.containsAll(newSuccessors)) return;
         for (T succ : newSuccessors) {
             GraphUtils.successorSet(succ, closed_inverse)
                 .addAll(GraphUtils.successors(t, closed_inverse));
@@ -224,15 +215,6 @@ public class Taxonomy<T> {
         for (T pred : GraphUtils.successors(t, closed_inverse)) {
             closed.get(pred).addAll(closedSuccs);
         }
-    }
-    
-    private Taxonomy(Taxonomy<T> inverse) {
-        canonical = inverse.canonical;
-        equivs = inverse.equivs;
-        reduced = inverse.reduced_inverse;
-        reduced_inverse = inverse.reduced;
-        closed = inverse.closed_inverse;
-        closed_inverse = inverse.closed;
     }
     
     public interface Ordering<U> {
@@ -285,7 +267,6 @@ public class Taxonomy<T> {
         }
 
         // Classify each concept:
-        Taxonomy<T> tax_inv = new Taxonomy<T>(this);
         List<T> definitionOrder = GraphUtils.weakTopologicalSort(poss);
         Collections.reverse(definitionOrder);
         for (T t : definitionOrder) {
@@ -304,7 +285,7 @@ public class Taxonomy<T> {
                  new InducedSubgraph<T>(reduced, toConsider),
                  new InducedSubgraph<T>(reduced_inverse, toConsider));
 
-            updateClosure(t, succs);
+            extendClosure(t, succs, closed, closed_inverse);
             prunePossibles(t, poss, poss_inv, closed, closed_inverse);
             
             toConsider = new HashSet<T>(poss_inv.get(t));
@@ -319,7 +300,7 @@ public class Taxonomy<T> {
                  new InducedSubgraph<T>(reduced, toConsider));
 
 
-            tax_inv.updateClosure(t, preds);
+            extendClosure(t, preds, closed_inverse, closed);
             prunePossibles(t, poss_inv, poss, closed_inverse, closed);
             
             // Update reduced:
