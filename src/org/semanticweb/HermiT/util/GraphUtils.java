@@ -299,9 +299,10 @@ public class GraphUtils {
             List<T> order = topologicalSort(graph, status.subTask("sorting"));
             Comparator<T> cmp = new CompareByPosition<T>(order);
             Collections.reverse(order);
-            status.setNumSteps(order.size());
+            TaskStatus analyzing = status.subTask("analyzing");
+            analyzing.setNumSteps(order.size());
             for (T t : order) {
-                status.step();
+                analyzing.step();
                 Set<T> reached = new HashSet<T>();
                 Set<T> tSucc = graph.get(t);
                 if (tSucc != null) {
@@ -326,6 +327,7 @@ public class GraphUtils {
                     } // end for succ
                 } // end if tSucc
             } // end for t
+            analyzing.done();
             status.done();
         } // end constructor
     } // end class TransAnalyzed

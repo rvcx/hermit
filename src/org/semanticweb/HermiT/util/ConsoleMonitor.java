@@ -35,15 +35,35 @@ public class ConsoleMonitor implements TaskStatus {
         int stepsComplete = (int) (numComplete / ((double) numTotal) * barWidth);
         for (int i = 0; i < stepsComplete; ++i) stream.print("*");
         for (int i = stepsComplete; i < barWidth; ++i) stream.print(" ");
-        stream.print("] " + String.valueOf(numComplete) + "/" + String.valueOf(numTotal));
+        stream.print("] " + String.valueOf(numComplete) + "/"
+                          + String.valueOf(numTotal));
+        if (numComplete > 0) {
+            long secs = 0;
+            if (numComplete < numTotal) {
+                double timeLeft = (numTotal - numComplete)
+                                * ((System.currentTimeMillis() - startTime)
+                                    / (double)numComplete);
+                secs = (long) (timeLeft/1000.0);
+                stream.print(" ETA ");
+            } else {
+                secs = (System.currentTimeMillis() - startTime) / 1000;
+                stream.print(" in ");
+            }
+            if (secs >= 3600) stream.print(secs/3600 + ":");
+            stream.print(String.format("%02d:%02d ", secs/60%3600, secs%60));
+            if (numComplete >= numTotal) stream.println("");
+        }
     }
     public void done() {
         lastRefresh = 0;
-        if (numSteps > 0) itemsComplete(numSteps, numSteps);
-        double taskTime = (System.currentTimeMillis() - startTime) / 1000.0;
-        stream.println("");
-        stream.println("Finished " + name +
-            " (" + String.format("%.2g", taskTime) + " seconds)");
+        if (numSteps > 0) {
+            itemsComplete(numSteps, numSteps);
+        } else {
+            double taskTime = (System.currentTimeMillis() - startTime) / 1000.0;
+            stream.println("");
+            stream.println("Finished " + name +
+                " (" + String.format("%.2g", taskTime) + " seconds)");
+        }
     }
     public TaskStatus subTask(String name) {
         if (numSteps > 0) step();

@@ -20,6 +20,7 @@ import java.util.TreeSet;
 import java.util.Map;
 
 import org.semanticweb.HermiT.Namespaces;
+import org.semanticweb.HermiT.Rewriting;
 import org.semanticweb.HermiT.datatypes.DataRange;
 
 /**
@@ -52,6 +53,8 @@ public class DLOntology implements Serializable {
     protected final Set<DescriptionGraph> m_allDescriptionGraphs;
 
     public DLOntology(String ontologyURI,Set<DLClause> dlClauses,Set<Atom> positiveFacts,Set<Atom> negativeFacts,Set<AtomicConcept> atomicConcepts,Set<Role> transitiveObjectRoles,Set<AtomicRole> atomicObjectRoles,Set<AtomicRole> atomicDataRoles,Set<Individual> individuals,boolean hasInverseRoles,boolean hasAtMostRestrictions,boolean hasNominals,boolean canUseNIRule,boolean hasDatatypes) {
+        // dlClauses = Rewriting.limitPredicateBranch(dlClauses, 1500,
+        //                         atomicConcepts, atomicObjectRoles);
         m_ontologyURI=ontologyURI;
         m_dlClauses=dlClauses;
         m_positiveFacts=positiveFacts;
