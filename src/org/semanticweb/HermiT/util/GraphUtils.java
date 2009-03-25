@@ -177,15 +177,22 @@ public class GraphUtils {
      * Complexity: O(|V| + |E|)
      */
     public static <T> List<T> topologicalSort(Map<T, Set<T>> graph) {
+        return topologicalSort(graph, new NullMonitor());
+    }
+    public static <T> List<T> topologicalSort(Map<T, Set<T>> graph,
+                                              TaskStatus status) {
         List<T> out = new ArrayList<T>();
         Map<T, Set<T>> incoming = reversed(graph);
         removeSelfLoops(incoming);
         pruneEmpty(incoming);
         Set<T> noIncoming = new HashSet<T>(graph.keySet());
         noIncoming.removeAll(incoming.keySet());
+        status.setNumSteps(incoming.size() + noIncoming.size());
         while (!noIncoming.isEmpty()) {
-            T t = noIncoming.iterator().next();
-            noIncoming.remove(t);
+            status.step();
+            Iterator<T> i = noIncoming.iterator();
+            T t = i.next();
+            i.remove();
             out.add(t);
             for (T succ : successors(t, graph)) {
                 if (succ.equals(t)) continue;
@@ -199,6 +206,7 @@ public class GraphUtils {
                 }
             }
         }
+        status.done();
         if (!incoming.isEmpty()) {
             throw new IllegalArgumentException
                 ("Unable to topologically sort a graph containing cycles.");
@@ -210,9 +218,13 @@ public class GraphUtils {
      * Return a linearization of a graph which is not necessarily acyclic.
      */
     public static <T> List<T> weakTopologicalSort(Map<T, Set<T>> graph) {
+        return weakTopologicalSort(graph, new NullMonitor());
+    }
+    public static <T> List<T> weakTopologicalSort(Map<T, Set<T>> graph,
+                                                  TaskStatus status) {
         Acyclic<T> acyc = new Acyclic<T>(graph, false);
         List<T> out = new ArrayList<T>();
-        for (T canonical : topologicalSort(acyc.graph)) {
+        for (T canonical : topologicalSort(acyc.graph, status.subTask("sorting"))) {
             out.addAll(acyc.equivs.get(canonical));
         }
         return out;
@@ -280,10 +292,16 @@ public class GraphUtils {
         public Map<T, Set<T>> reduced = new HashMap<T, Set<T>>();
         public Map<T, Set<T>> closed = new HashMap<T, Set<T>>();
         public TransAnalyzed(Map<T, Set<T>> graph) {
-            List<T> order = topologicalSort(graph);
+            this(graph, new NullMonitor());
+        }
+        
+        public TransAnalyzed(Map<T, Set<T>> graph, TaskStatus status) {
+            List<T> order = topologicalSort(graph, status.subTask("sorting"));
             Comparator<T> cmp = new CompareByPosition<T>(order);
             Collections.reverse(order);
+            status.setNumSteps(order.size());
             for (T t : order) {
+                status.step();
                 Set<T> reached = new HashSet<T>();
                 Set<T> tSucc = graph.get(t);
                 if (tSucc != null) {
@@ -294,22 +312,21 @@ public class GraphUtils {
                     for (T succ : successors) {
                         if (!reached.contains(succ)) {
                             closedSucc.add(succ);
-                            // if (!succ.equals(t)) {
-                                reducedSucc.add(succ);
-                                Set<T> reachable = closed.get(succ);
-                                if (reachable != null) {
-                                    for (T desc : reachable) {
-                                        if (!reached.contains(desc)) {
-                                            reached.add(desc);
-                                            closedSucc.add(desc);
-                                        }
+                            reducedSucc.add(succ);
+                            Set<T> reachable = closed.get(succ);
+                            if (reachable != null) {
+                                for (T desc : reachable) {
+                                    if (!reached.contains(desc)) {
+                                        reached.add(desc);
+                                        closedSucc.add(desc);
                                     }
                                 }
-                            // }
+                            }
                         }
                     } // end for succ
                 } // end if tSucc
             } // end for t
+            status.done();
         } // end constructor
     } // end class TransAnalyzed
     
@@ -404,6 +421,19 @@ public class GraphUtils {
             }
         }
         return true;
+    }
+    
+    public static <T> void restrictToDomain(Map<T, Set<T>> graph,
+                                            Set<T> domain) {
+        for (Iterator<Map.Entry<T, Set<T>>> i = graph.entrySet().iterator();
+             i.hasNext(); ) {
+            Map.Entry<T, Set<T>> e = i.next();
+            if (domain.contains(e.getKey())) {
+                e.getValue().retainAll(domain);
+            } else {
+                i.remove();
+            }
+        }
     }
     
     // public static void main(String[] args) {

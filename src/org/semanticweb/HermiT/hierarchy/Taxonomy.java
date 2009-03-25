@@ -14,7 +14,9 @@ import org.semanticweb.HermiT.util.InducedSubgraph;
 import org.semanticweb.HermiT.util.DifferenceSet;
 
 import org.semanticweb.HermiT.util.GraphTesting;
-
+import org.semanticweb.HermiT.util.TaskStatus;
+import org.semanticweb.HermiT.util.NullMonitor;
+import org.semanticweb.HermiT.util.ConsoleMonitor;
 
 public class Taxonomy<T> {
     public Map<T, T> canonical;
@@ -41,6 +43,7 @@ public class Taxonomy<T> {
                 if (canonicalSuccs != null) {
                     canonicalSuccs.retainAll(oldnameSuccs);
                 } else {
+                    assert false;
                     possibleSuccessors.put(e.getValue(), oldnameSuccs);
                 }
             }
@@ -256,52 +259,107 @@ public class Taxonomy<T> {
     public Taxonomy(final Ordering<? super T> order,
                     Set<T> domain,
                     Map<T, Set<T>> knownSuccessors, // can't be null
-                    Map<T, Set<T>> possibleSuccessors) {
+                    Map<T, Set<T>> possibleSuccessors,
+                    TaskStatus status) {
+        if (status == null) status = new NullMonitor();
         // Sanitize knownSuccessors and init taxonomy from known info:
         if (knownSuccessors == null) {
             knownSuccessors = new HashMap<T, Set<T>>();
         }
+        GraphUtils.restrictToDomain(knownSuccessors, domain);
         for (T t : domain) {
             GraphUtils.successorSet(t, knownSuccessors).add(t);
         }
         
+        TaskStatus analysisStatus
+            = status.subTask("Analyzing known relationships");
+        TaskStatus cur = analysisStatus.subTask("Removing cycles");
         GraphUtils.Acyclic<T> acyc
             = new GraphUtils.Acyclic<T>(knownSuccessors, true);
+        cur.done();
         canonical = acyc.canonical;
         equivs = acyc.equivs;
+        domain.retainAll(equivs.keySet());
         GraphUtils.TransAnalyzed<T> analyzed
-            = new GraphUtils.TransAnalyzed<T>(acyc.graph);
+            = new GraphUtils.TransAnalyzed<T>(acyc.graph,
+                                        analysisStatus.subTask("Reducing"));
         reduced = analyzed.reduced;
         GraphUtils.removeSelfLoops(reduced);
         reduced_inverse = GraphUtils.reversed(reduced);
         for (T t : domain) {
             GraphUtils.successorSet(t, reduced);
             GraphUtils.successorSet(t, reduced_inverse);
+            assert analyzed.closed.get(t).contains(t);
         }
         closed = analyzed.closed;
         closed_inverse = GraphUtils.reversed(closed);
+        analysisStatus.done();
         
+        assert closed.keySet().equals(domain);
+        // if (!closed_inverse.keySet().equals(domain)) {
+        //     System.err.println(domain.size());
+        //     System.err.println(closed_inverse.keySet().size());
+        //     assert false;
+        // }
+        assert closed_inverse.keySet().equals(domain);
+        assert reduced.keySet().equals(domain);
+        assert reduced_inverse.keySet().equals(domain);
+
         // Sanitize possibleSuccessors and prune based on known info:
         if (possibleSuccessors == null) {
             possibleSuccessors = new HashMap<T, Set<T>>();
         }
+        for (Iterator<Map.Entry<T, Set<T>>> i
+                = possibleSuccessors.entrySet().iterator();
+             i.hasNext(); ) {
+            Map.Entry<T, Set<T>> e = i.next();
+            T can = canonical.get(e.getKey());
+            if (can != null && domain.contains(can)) {
+                e.getValue().retainAll(domain);
+                e.getValue().addAll(closed.get(can));
+            } else {
+                i.remove();
+            }
+        }
         for (T t : domain) {
-            Set<T> s = possibleSuccessors.get(t);
-            if (s == null) {
+            if (!possibleSuccessors.containsKey(t)) {
                 possibleSuccessors.put(t, new HashSet<T>(domain));
             }
         }
+        TaskStatus possStatus
+            = status.subTask("Preprocessing possible relationships");
         prunePossibles(possibleSuccessors);
+        possStatus.done();
+        for (Iterator<Map.Entry<T, Set<T>>> i
+                = possibleSuccessors.entrySet().iterator();
+             i.hasNext(); ) {
+            if (!domain.contains(i.next().getKey())) {
+                i.remove();
+            }
+        }
         Map<T, Set<T>> poss = possibleSuccessors;
         Map<T, Set<T>> poss_inv = GraphUtils.reversed(poss);
-        for (T t : domain) {
-            GraphUtils.successorSet(t, poss_inv);
-        }
+
+        // assert poss.keySet().equals(domain);
+        // if (!poss_inv.keySet().equals(domain)) {
+        //     Set<T> s = new HashSet<T>(poss_inv.keySet());
+        //     System.err.println(s.size());
+        //     System.err.println(domain.size());
+        //     domain.removeAll(s);
+        //     System.err.println(domain.size());
+        //     // System.err.println(domain);
+        //     assert false;
+        // }
+        // assert poss_inv.keySet().equals(domain);
 
         // Classify each concept:
-        List<T> definitionOrder = GraphUtils.weakTopologicalSort(poss);
-        Collections.reverse(definitionOrder);
+        List<T> definitionOrder = GraphUtils.weakTopologicalSort(poss,
+                            status.subTask("choosing classification order"));
+        //Collections.reverse(definitionOrder);
+        status.setNumSteps(definitionOrder.size());
         for (T t : definitionOrder) {
+            status.step();
+            
             // Skip an element if we already know everything about it:
             if (poss.get(t).equals(closed.get(t)) &&
                 poss_inv.get(t).equals(closed_inverse.get(t))) continue;
@@ -344,8 +402,8 @@ public class Taxonomy<T> {
                 eqClass.addAll(equivs.get(t));
                 for (T equiv : equivs.get(t)) {
                     canonical.put(equiv, tCanonical);
-                    equivs.put(equiv, eqClass);
                 }
+                equivs.remove(t);
                 succs = GraphUtils.successors(t, reduced);
                 preds = GraphUtils.successors(t, reduced_inverse);
                 t = tCanonical;
@@ -356,6 +414,7 @@ public class Taxonomy<T> {
             extendReduced(t, preds,
                           reduced_inverse, reduced, closed_inverse, closed);
         }
+        status.done();
     }
     
     Position getPosition(final Hierarchy.Element<T> element,
@@ -491,7 +550,8 @@ public class Taxonomy<T> {
         GraphTesting.addEdges(poss, ladder.domain, 0.5, rand);
         
         Taxonomy<Integer> tax = new Taxonomy<Integer>(order, ladder.domain,
-                                                      known, poss);
+                                                      known, poss,
+                        new ConsoleMonitor("Building taxonomy", System.err));
         
         if (!tax.reduced.equals(correct.reduced)) {
             System.out.println("Correct taxonomy:");

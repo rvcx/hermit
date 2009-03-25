@@ -9,6 +9,9 @@ import java.util.Collection;
 
 import org.semanticweb.HermiT.model.*;
 import org.semanticweb.HermiT.tableau.*;
+import org.semanticweb.HermiT.util.TaskStatus;
+import org.semanticweb.HermiT.util.NullMonitor;
+import org.semanticweb.HermiT.util.GraphUtils;
 
 public class ReasoningCache {
     public Map<AtomicConcept, Set<AtomicConcept>>
@@ -28,12 +31,18 @@ public class ReasoningCache {
     }
     
     public void seed(Collection<AtomicConcept> concepts, Tableau tableau) {
+        seed(concepts, tableau, new NullMonitor());
+    }
+    
+    public void seed(Collection<AtomicConcept> concepts, Tableau tableau,
+                     TaskStatus status) {
+        status.setNumSteps(concepts.size());
         for (AtomicConcept c : concepts) {
+            status.step();
             if (!tableau.isSatisfiable(c)) {
                 knownSubsumers.put(c, new HashSet<AtomicConcept>(concepts));
                 possibleSubsumers.put(c, new HashSet<AtomicConcept>());
             } else {
-                //cache.update(m_tableau.getCheckedNode().getCanonicalNode(), c);
                 Node node = tableau.getCheckedNode().getCanonicalNode();
                 Set<AtomicConcept> detConcepts = new HashSet<AtomicConcept>();
                 Set<AtomicConcept> nondetConcepts = new HashSet<AtomicConcept>();
@@ -60,20 +69,18 @@ public class ReasoningCache {
                     }
                 } // done retrieving info from tableau
                 { // update information about c:
-                    Set<AtomicConcept> set = knownSubsumers.get(c);
-                    if (set == null) {
-                        set = new HashSet<AtomicConcept>();
-                        knownSubsumers.put(c, set);
-                    }
-                    set.addAll(detConcepts);
-                    set = possibleSubsumers.get(c);
-                    if (set == null) {
-                        set = new HashSet<AtomicConcept>(nondetConcepts);
-                        possibleSubsumers.put(c, set);
+                    GraphUtils.successorSet(c, knownSubsumers).addAll(detConcepts);
+                    Set<AtomicConcept> poss = possibleSubsumers.get(c);
+                    if (poss == null) {
+                        poss = new HashSet<AtomicConcept>(nondetConcepts);
+                        possibleSubsumers.put(c, poss);
                     } else {
-                        set.retainAll(nondetConcepts);
+                        poss.retainAll(nondetConcepts);
                     }
                 } // done updating information about c
+                if (!nondetConcepts.isEmpty()) {
+                    System.err.println("nondeterminism!");
+                }
                 nondetConcepts.addAll(detConcepts);
                 for (AtomicConcept d : nondetConcepts) {
                     Set<AtomicConcept> set = possibleSubsumers.get(d);
@@ -86,6 +93,7 @@ public class ReasoningCache {
                 }
             } // end if isSatisfiable(c)
         } // end for
+        status.done();
     } // end function seed
     
 }

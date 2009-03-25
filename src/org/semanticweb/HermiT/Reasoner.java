@@ -65,6 +65,9 @@ import org.semanticweb.HermiT.owlapi.structural.OWLNormalization;
 import org.semanticweb.HermiT.owlapi.structural.TransitivityManager;
 import org.semanticweb.HermiT.tableau.Tableau;
 import org.semanticweb.HermiT.util.GraphUtils;
+import org.semanticweb.HermiT.util.TaskStatus;
+import org.semanticweb.HermiT.util.NullMonitor;
+import org.semanticweb.HermiT.util.ConsoleMonitor;
 import org.semanticweb.HermiT.util.TranslatedMap;
 import org.semanticweb.HermiT.util.Translator;
 import org.semanticweb.owl.apibinding.OWLManager;
@@ -141,6 +144,11 @@ public class Reasoner implements Serializable {
     }
     
     private Hierarchy<AtomicConcept> getConceptHierarchy() {
+        return getConceptHierarchy(new ConsoleMonitor("Building hierarchy", System.err));
+    }
+    
+    private Hierarchy<AtomicConcept>
+        getConceptHierarchy(TaskStatus status) {
         if (conceptHierarchy == null) {
             Set<AtomicConcept> allConcepts = new HashSet<AtomicConcept>();
             for (AtomicConcept c : dlOntology.getAllAtomicConcepts()) {
@@ -148,24 +156,32 @@ public class Reasoner implements Serializable {
                     allConcepts.add(c);
                 }
             }
-            Map<AtomicConcept, Set<AtomicConcept>> known
-                = new HashMap<AtomicConcept, Set<AtomicConcept>>();
-            for (AtomicConcept c : allConcepts) {
-                Set<AtomicConcept> s = new HashSet<AtomicConcept>();
-                s.add(c);
-                known.put(c, s);
-            }
+            ReasoningCache cache = new ReasoningCache();
+            cache.seed(allConcepts, tableau,
+                       status.subTask("Testing concepts"));
+            // Map<AtomicConcept, Set<AtomicConcept>> known
+            //     = new HashMap<AtomicConcept, Set<AtomicConcept>>();
+            // for (AtomicConcept c : allConcepts) {
+            //     Set<AtomicConcept> s = new HashSet<AtomicConcept>();
+            //     s.add(c);
+            //     known.put(c, s);
+            // }
             Taxonomy<AtomicConcept> tax = new Taxonomy<AtomicConcept>(
                 new Taxonomy.Ordering<AtomicConcept>() {
                     public boolean doesPrecede(AtomicConcept child,
                                                AtomicConcept parent) {
+                        System.err.println("doing subsumption test");
                         return tableau.isSubsumedBy(child, parent);
                     }
                 },
-                known, null // TODO: set these!
+                allConcepts,
+                cache.knownSubsumers,
+                cache.possibleSubsumers,
+                status.subTask("Classifying")
             );
             conceptHierarchy = new TaxonomyHierarchy<AtomicConcept>(tax);
         }
+        status.done();
         return conceptHierarchy;
     }
     
